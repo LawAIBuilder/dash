@@ -1,0 +1,70 @@
+{
+  "_metadata": {
+    "source": "Minnesota DLI - Statewide average weekly wage, minimum and maximum compensation rates and adjustments",
+    "sourceDocument": "Common Minnesota workers' compensation benefit adjustments (updated Dec 29, 2025)",
+    "extractedBy": "Claude (Anthropic) from official DLI PDF",
+    "extractedDate": "2026-02-21"
+  },
+  "compensationRates": [
+    {
+      "effectiveDate": "2021-10-01",
+      "saww": 1232.0,
+      "minCompRate": 251.33,
+      "maxCompRate": 1256.64,
+      "annualAdjustmentPct": 6.0,
+      "suppBenefitPre1992Pct": 4.0,
+      "suppBenefit1992to1995Pct": 2.0,
+      "suppBenefit1995to2013Pct": null,
+      "suppBenefit2013laterPct": 3.0,
+      "minRateOrActualWage": 801.0
+    },
+    {
+      "effectiveDate": "2022-10-01",
+      "saww": 1287.0,
+      "minCompRate": 262.55,
+      "maxCompRate": 1312.74,
+      "annualAdjustmentPct": 4.46,
+      "suppBenefitPre1992Pct": 4.0,
+      "suppBenefit1992to1995Pct": 2.0,
+      "suppBenefit1995to2013Pct": null,
+      "suppBenefit2013laterPct": 3.0,
+      "minRateOrActualWage": 837.0
+    },
+    {
+      "effectiveDate": "2023-10-01",
+      "saww": 1337.0,
+      "minCompRate": 272.75,
+      "maxCompRate": 1363.74,
+      "annualAdjustmentPct": 3.89,
+      "suppBenefitPre1992Pct": 3.89,
+      "suppBenefit1992to1995Pct": 2.0,
+      "suppBenefit1995to2013Pct": null,
+      "suppBenefit2013laterPct": 3.0,
+      "minRateOrActualWage": 870.0
+    },
+    {
+      "effectiveDate": "2024-10-01",
+      "saww": 1372.0,
+      "minCompRate": 296.35,
+      "maxCompRate": 1481.76,
+      "annualAdjustmentPct": 2.62,
+      "suppBenefitPre1992Pct": 2.62,
+      "suppBenefit1992to1995Pct": 2.0,
+      "suppBenefit1995to2013Pct": null,
+      "suppBenefit2013laterPct": 2.62,
+      "minRateOrActualWage": 892.0
+    },
+    {
+      "effectiveDate": "2025-10-01",
+      "saww": 1423.0,
+      "minCompRate": 307.37,
+      "maxCompRate": 1536.84,
+      "annualAdjustmentPct": 3.72,
+      "suppBenefitPre1992Pct": 3.72,
+      "suppBenefit1992to1995Pct": 2.0,
+      "suppBenefit1995to2013Pct": null,
+      "suppBenefit2013laterPct": 3.0,
+      "minRateOrActualWage": 925.0
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "wc-legal-prep",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev --workspace @wc/api",
+    "dev:desktop": "npm run dev --workspace @wc/desktop",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run build --workspace @wc/domain-core && npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.9"
+  }
+}

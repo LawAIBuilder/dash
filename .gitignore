@@ -1,0 +1,15 @@
+node_modules
+dist
+coverage
+.DS_Store
+*.log
+.env
+.env.local
+apps/api/data
+apps/desktop/dist
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.npm-cache
+.cursor/
+*.traineddata
