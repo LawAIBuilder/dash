@@ -7,6 +7,7 @@
     "packages/*"
   ],
   "scripts": {
+    "start": "node apps/api/dist/server.js",
     "build": "npm run build --workspaces --if-present",
     "dev": "npm run dev --workspace @wc/api",
     "dev:desktop": "npm run dev --workspace @wc/desktop",
