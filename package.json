@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "start": "node apps/api/dist/server.js",
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build --workspace @wc/domain-core --workspace @wc/wc-rules --workspace @wc/wc-calculators && npm run build --workspace @wc/api --workspace @wc/desktop --if-present",
     "dev": "npm run dev --workspace @wc/api",
     "dev:desktop": "npm run dev --workspace @wc/desktop",
     "test": "npm run test --workspaces --if-present",
