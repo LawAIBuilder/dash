@@ -2,7 +2,23 @@ import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { writeCaseEvent } from "./events.js";
 
-const PROJECTION_VERSION = "slice03.v1";
+const PROJECTION_VERSION = "slice03.v2";
+
+function extractFolderPath(rawJsonStr: string | null, rootFolderId: string | null): string | null {
+  if (!rawJsonStr) return null;
+  try {
+    const raw = JSON.parse(rawJsonStr) as Record<string, unknown>;
+    const pc = raw.path_collection as { entries?: Array<{ id?: string; name?: string }> } | undefined;
+    if (!pc?.entries?.length) return null;
+    const entries = pc.entries.filter(
+      (e) => e.id !== "0" && (!rootFolderId || e.id !== rootFolderId)
+    );
+    if (entries.length === 0) return null;
+    return entries.map((e) => e.name ?? e.id ?? "").join("/");
+  } catch {
+    return null;
+  }
+}
 
 function stableHash(value: unknown) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -251,6 +267,7 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
           dt.hearing_relevance,
           dt.mandatory_vlm_ocr,
           dt.default_priority,
+          si.parent_remote_id,
           json_extract(si.raw_json, '$.normalization_status') AS normalization_status,
           json_extract(si.raw_json, '$.canonical_document_id') AS canonical_document_id,
           si.raw_json,
@@ -274,8 +291,14 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
     hearing_relevance: string | null;
     mandatory_vlm_ocr: number | null;
     default_priority: number | null;
+    parent_remote_id: string | null;
     [key: string]: unknown;
   }>;
+
+  const boxRootFolderId = caseHeader?.box_root_folder_id ?? null;
+  for (const item of sourceItems) {
+    (item as Record<string, unknown>).folder_path = extractFolderPath(item.raw_json, boxRootFolderId);
+  }
 
   const canonicalDocuments = db
     .prepare(

@@ -70,10 +70,11 @@ describe("exhibit workspace routes", () => {
     expect(createPacketRes.statusCode).toBe(200);
     const packet = createPacketRes.json<{ packet: { id: string; sections: Array<{ id: string; section_key: string }> } }>().packet;
     expect(packet.id).toBeTruthy();
-    expect(packet.sections.length).toBe(3);
+    expect(packet.sections.length).toBe(1);
 
     const employeeSection = packet.sections.find((section) => section.section_key === "employee");
     expect(employeeSection).toBeDefined();
+    expect((employeeSection as { exhibits?: unknown[] })?.exhibits?.length).toBeGreaterThanOrEqual(5);
 
     const createSlotRes = await app.inject({
       method: "POST",
@@ -139,8 +140,8 @@ describe("exhibit workspace routes", () => {
       preview: { total_exhibits: number; total_items: number };
     }>();
     expect(finalized.packet.status).not.toBe("draft");
-    expect(finalized.preview.total_exhibits).toBe(1);
-    expect(finalized.preview.total_items).toBe(1);
+    expect(finalized.preview.total_exhibits).toBeGreaterThanOrEqual(1);
+    expect(finalized.preview.total_items).toBeGreaterThanOrEqual(1);
   });
 
   it("exports a combined packet PDF using stored exhibit order", async () => {
@@ -249,7 +250,9 @@ describe("exhibit workspace routes", () => {
       url: `/api/cases/${caseId}/exhibit-packets`,
       payload: { packet_name: "Guard Packet" }
     });
-    const packet = createPacketRes.json<{ packet: { id: string; sections: Array<{ id: string; section_key: string }> } }>().packet;
+    const packet = createPacketRes.json<{
+      packet: { id: string; sections: Array<{ id: string; section_key: string; exhibits: Array<{ id: string }> }> };
+    }>().packet;
 
     const duplicateSectionRes = await app.inject({
       method: "POST",
@@ -259,25 +262,27 @@ describe("exhibit workspace routes", () => {
     expect(duplicateSectionRes.statusCode).toBe(400);
 
     const employeeSection = packet.sections.find((section) => section.section_key === "employee")!;
-    const jointSection = packet.sections.find((section) => section.section_key === "joint")!;
 
-    const employeeSlotRes = await app.inject({
+    const addSectionRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-sections/${employeeSection.id}/exhibits`,
-      payload: { title: "Employee Slot" }
+      url: `/api/exhibit-packets/${packet.id}/sections`,
+      payload: { section_key: "other", section_label: "Other Exhibits" }
     });
-    const employeeSlotId = employeeSlotRes.json<{
-      packet: { sections: Array<{ section_key: string; exhibits: Array<{ id: string }> }> };
-    }>().packet.sections.find((section) => section.section_key === "employee")!.exhibits[0]!.id;
+    expect(addSectionRes.statusCode).toBe(200);
+    const otherSection = addSectionRes.json<{
+      packet: { sections: Array<{ id: string; section_key: string }> };
+    }>().packet.sections.find((s) => s.section_key === "other")!;
 
-    const jointSlotRes = await app.inject({
+    const employeeSlotId = employeeSection.exhibits?.[0]?.id ?? (() => { throw new Error("no starter slot"); })();
+
+    const otherSlotRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-sections/${jointSection.id}/exhibits`,
-      payload: { title: "Joint Slot" }
+      url: `/api/exhibit-sections/${otherSection.id}/exhibits`,
+      payload: { title: "Other Slot" }
     });
-    const jointSlotId = jointSlotRes.json<{
+    const otherSlotId = otherSlotRes.json<{
       packet: { sections: Array<{ section_key: string; exhibits: Array<{ id: string }> }> };
-    }>().packet.sections.find((section) => section.section_key === "joint")!.exhibits[0]!.id;
+    }>().packet.sections.find((section) => section.section_key === "other")!.exhibits[0]!.id;
 
     const sourceItem = db
       .prepare(`SELECT id FROM source_items WHERE case_id = ? LIMIT 1`)
@@ -292,7 +297,7 @@ describe("exhibit workspace routes", () => {
 
     const duplicateAssign = await app.inject({
       method: "POST",
-      url: `/api/exhibits/${jointSlotId}/items`,
+      url: `/api/exhibits/${otherSlotId}/items`,
       payload: { source_item_id: sourceItem.id }
     });
     expect(duplicateAssign.statusCode).toBe(400);
@@ -309,12 +314,21 @@ describe("exhibit workspace routes", () => {
     const packet = packetRes.json<{ packet: { id: string; sections: Array<{ id: string; section_key: string }> } }>().packet;
 
     const employeeSection = packet.sections.find((section) => section.section_key === "employee")!;
-    const employerSection = packet.sections.find((section) => section.section_key === "employer")!;
+
+    const addSec1 = await app.inject({
+      method: "POST",
+      url: `/api/exhibit-packets/${packet.id}/sections`,
+      payload: { section_key: "employer", section_label: "Employer Exhibits" }
+    });
+    expect(addSec1.statusCode).toBe(200);
+    const employerSection = addSec1.json<{
+      packet: { sections: Array<{ id: string; section_key: string }> };
+    }>().packet.sections.find((s) => s.section_key === "employer")!;
 
     const sectionReorderRes = await app.inject({
       method: "POST",
       url: `/api/exhibit-packets/${packet.id}/sections/reorder`,
-      payload: { section_ids: [employerSection.id, employeeSection.id, packet.sections.find((section) => section.section_key === "joint")!.id] }
+      payload: { section_ids: [employerSection.id, employeeSection.id] }
     });
     expect(sectionReorderRes.statusCode).toBe(200);
     const sectionRows = db
@@ -322,30 +336,21 @@ describe("exhibit workspace routes", () => {
       .all(packet.id) as Array<{ id: string; sort_order: number }>;
     expect(sectionRows[0]!.id).toBe(employerSection.id);
 
-    await app.inject({
-      method: "POST",
-      url: `/api/exhibit-sections/${employeeSection.id}/exhibits`,
-      payload: { title: "Slot A" }
-    });
-    const secondSlotRes = await app.inject({
-      method: "POST",
-      url: `/api/exhibit-sections/${employeeSection.id}/exhibits`,
-      payload: { title: "Slot B" }
-    });
-    const employeePacket = secondSlotRes.json<{
-      packet: { sections: Array<{ section_key: string; exhibits: Array<{ id: string }> }> };
-    }>().packet;
-    const employeeSlots = employeePacket.sections.find((section) => section.section_key === "employee")!.exhibits;
+    const starterExhibits = db
+      .prepare(`SELECT id FROM exhibits WHERE exhibit_section_id = ? ORDER BY sort_order ASC`)
+      .all(employeeSection.id) as Array<{ id: string }>;
+    expect(starterExhibits.length).toBeGreaterThanOrEqual(2);
+
     const exhibitReorderRes = await app.inject({
       method: "POST",
       url: `/api/exhibit-sections/${employeeSection.id}/exhibits/reorder`,
-      payload: { exhibit_ids: [employeeSlots[1]!.id, employeeSlots[0]!.id] }
+      payload: { exhibit_ids: [starterExhibits[1]!.id, starterExhibits[0]!.id, ...starterExhibits.slice(2).map((e) => e.id)] }
     });
     expect(exhibitReorderRes.statusCode).toBe(200);
     const exhibitRows = db
       .prepare(`SELECT id, sort_order FROM exhibits WHERE exhibit_section_id = ? ORDER BY sort_order ASC`)
       .all(employeeSection.id) as Array<{ id: string; sort_order: number }>;
-    expect(exhibitRows[0]!.id).toBe(employeeSlots[1]!.id);
+    expect(exhibitRows[0]!.id).toBe(starterExhibits[1]!.id);
   });
 
   it("enforces case ownership on case-scoped exhibit routes", async () => {

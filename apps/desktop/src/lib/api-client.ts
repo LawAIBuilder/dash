@@ -589,3 +589,85 @@ export async function updateDocumentTemplateFill(
   const payload = await readJson<{ ok: true; fill: UserDocumentTemplateFill }>(response);
   return payload.fill;
 }
+
+// ── AI assembly ────────────────────────────────────────────────────────────
+
+export interface AIEventConfig {
+  id: string;
+  case_id: string | null;
+  event_type: string;
+  event_label: string;
+  instructions: string;
+  exhibit_strategy_json: string | null;
+  enabled: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AIJob {
+  id: string;
+  case_id: string;
+  event_type: string;
+  status: string;
+  input_json: string | null;
+  output_json: string | null;
+  error_message: string | null;
+  model: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export async function getAIStatus() {
+  const response = await fetch(apiUrl("/api/ai/status"), { headers: buildApiHeaders() });
+  return readJson<{ ok: true; configured: boolean }>(response);
+}
+
+export async function listAIEventConfigs(caseId: string) {
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/ai/event-configs`), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ ok: true; configs: AIEventConfig[] }>(response);
+  return payload.configs;
+}
+
+export async function upsertAIEventConfig(
+  caseId: string,
+  input: { event_type: string; event_label: string; instructions: string; exhibit_strategy_json?: string | null }
+) {
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/ai/event-configs`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input)
+  });
+  const payload = await readJson<{ ok: true; config: AIEventConfig }>(response);
+  return payload.config;
+}
+
+export async function deleteAIEventConfig(caseId: string, configId: string) {
+  const response = await fetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/ai/event-configs/${encodeURIComponent(configId)}`),
+    { method: "DELETE", headers: buildApiHeaders() }
+  );
+  return readJson<{ ok: true }>(response);
+}
+
+export async function runAIAssembly(caseId: string, eventType: string) {
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/ai/assemble`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ event_type: eventType })
+  });
+  const payload = await readJson<{ ok: true; job: AIJob }>(response);
+  return payload.job;
+}
+
+export async function listAIJobs(caseId: string) {
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/ai/jobs`), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ ok: true; jobs: AIJob[] }>(response);
+  return payload.jobs;
+}

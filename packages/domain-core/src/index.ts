@@ -283,6 +283,8 @@ export interface ProjectionSourceItem {
   default_priority?: number | null;
   normalization_status?: string | null;
   canonical_document_id?: string | null;
+  folder_path?: string | null;
+  parent_remote_id?: string | null;
   raw_json: string | null;
   updated_at: string | null;
 }

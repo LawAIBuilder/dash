@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDown, ArrowUp, Download, FileJson, Plus, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, FileJson, FolderOpen, Plus, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -37,15 +37,17 @@ function canGeneratePacketPdf(status: string) {
   return status === "finalized" || status === "needs_review" || status === "exported";
 }
 
-function groupSourceItemsByCategory(
-  sourceItems: NonNullable<ReturnType<typeof useProjection>["projection"]>["slices"]["document_inventory_slice"]["source_items"]
-) {
-  return sourceItems.reduce<Record<string, typeof sourceItems>>((acc, item) => {
-    const key = item.document_category ?? "other";
-    acc[key] ??= [];
-    acc[key].push(item);
-    return acc;
-  }, {});
+type SourceItem = NonNullable<ReturnType<typeof useProjection>["projection"]>["slices"]["document_inventory_slice"]["source_items"][number];
+
+function groupSourceItemsByFolder(sourceItems: SourceItem[]) {
+  return sourceItems
+    .filter((item) => item.source_kind === "file")
+    .reduce<Record<string, SourceItem[]>>((acc, item) => {
+      const key = item.folder_path || "Root";
+      acc[key] ??= [];
+      acc[key].push(item);
+      return acc;
+    }, {});
 }
 
 function PageRulesDialog({
@@ -319,7 +321,8 @@ export function CaseExhibitsPage() {
   });
 
   const sourceItems = projection?.slices.document_inventory_slice?.source_items ?? [];
-  const groupedSourceItems = useMemo(() => groupSourceItemsByCategory(sourceItems), [sourceItems]);
+  const groupedSourceItems = useMemo(() => groupSourceItemsByFolder(sourceItems), [sourceItems]);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
   const assignedSourceItemIds = useMemo(
     () =>
       new Set(
@@ -863,65 +866,88 @@ export function CaseExhibitsPage() {
               <CardHeader>
                 <CardTitle>Source tray</CardTitle>
                 <CardDescription>
-                  Documents remain grouped by their existing legal category. Drag them into exhibit slots on the right.
+                  Documents grouped by Box folder. Collapse folders to focus on relevant categories. Drag or assign to exhibit slots.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-2">
                 {Object.entries(groupedSourceItems)
                   .sort(([left], [right]) => left.localeCompare(right))
-                  .map(([category, items]) => (
-                    <div key={category} className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="font-medium">{formatLabel(category)}</div>
-                        <Badge variant="outline">{items.length}</Badge>
-                      </div>
-                      <div className="grid gap-2">
-                        {items.map((item) => {
-                          const assigned = assignedSourceItemIds.has(item.id);
-                          return (
-                            <div
-                              key={item.id}
-                              draggable
-                              onDragStart={(event) => {
-                                event.dataTransfer.setData("text/source-item-id", item.id);
-                              }}
-                              className="cursor-grab rounded-lg border bg-background/70 p-3 active:cursor-grabbing"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="font-medium">{item.title ?? "Untitled source item"}</div>
-                                  <div className="text-sm text-muted-foreground">
-                                    {item.document_type_name ? formatLabel(item.document_type_name) : "Unclassified"}
-                                    {item.source_kind ? ` • ${formatLabel(item.source_kind)}` : ""}
+                  .map(([folder, items]) => {
+                    const collapsed = collapsedFolders.has(folder);
+                    const assignedCount = items.filter((i) => assignedSourceItemIds.has(i.id)).length;
+                    return (
+                      <div key={folder} className="rounded-lg border">
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm font-medium transition-colors hover:bg-muted/50"
+                          onClick={() =>
+                            setCollapsedFolders((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(folder)) next.delete(folder);
+                              else next.add(folder);
+                              return next;
+                            })
+                          }
+                        >
+                          {collapsed ? <ChevronRight className="size-4 shrink-0" /> : <ChevronDown className="size-4 shrink-0" />}
+                          <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+                          <span className="flex-1 truncate">{folder}</span>
+                          <Badge variant="outline" className="ml-auto shrink-0">
+                            {assignedCount > 0 ? `${assignedCount}/` : ""}{items.length}
+                          </Badge>
+                        </button>
+                        {!collapsed ? (
+                          <div className="grid gap-1.5 px-3 pb-3">
+                            {items.map((item) => {
+                              const assigned = assignedSourceItemIds.has(item.id);
+                              return (
+                                <div
+                                  key={item.id}
+                                  draggable
+                                  onDragStart={(event) => {
+                                    event.dataTransfer.setData("text/source-item-id", item.id);
+                                  }}
+                                  className="cursor-grab rounded-lg border bg-background/70 px-3 py-2 active:cursor-grabbing"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <div className="truncate font-medium">{item.title ?? "Untitled"}</div>
+                                      <div className="truncate text-xs text-muted-foreground">
+                                        {item.document_type_name ? formatLabel(item.document_type_name) : "Unclassified"}
+                                      </div>
+                                    </div>
+                                    <div className="flex shrink-0 items-center gap-2">
+                                      <Badge variant={assigned ? "secondary" : "outline"} className="text-xs">
+                                        {assigned ? "Assigned" : "Available"}
+                                      </Badge>
+                                      {allExhibits.length > 0 ? (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 px-2 text-xs"
+                                          disabled={assigned}
+                                          onClick={() =>
+                                            setAssignState({
+                                              sourceItemId: item.id,
+                                              sourceTitle: item.title ?? "Untitled",
+                                              selectedExhibitId: "",
+                                              open: true
+                                            })
+                                          }
+                                        >
+                                          Assign
+                                        </Button>
+                                      ) : null}
+                                    </div>
                                   </div>
                                 </div>
-                                <div className="flex flex-col items-end gap-2">
-                                  <Badge variant={assigned ? "secondary" : "outline"}>{assigned ? "Assigned" : "Available"}</Badge>
-                                  {allExhibits.length > 0 ? (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      disabled={assigned}
-                                      onClick={() =>
-                                        setAssignState({
-                                          sourceItemId: item.id,
-                                          sourceTitle: item.title ?? "Untitled source item",
-                                          selectedExhibitId: "",
-                                          open: true
-                                        })
-                                      }
-                                    >
-                                      Assign
-                                    </Button>
-                                  ) : null}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
+                              );
+                            })}
+                          </div>
+                        ) : null}
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
               </CardContent>
             </Card>
 

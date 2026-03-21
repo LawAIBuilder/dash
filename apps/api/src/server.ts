@@ -91,6 +91,16 @@ import {
 import { seedFoundation } from "./seed.js";
 import { readWorkerHealth } from "./worker-health.js";
 import {
+  deleteAIEventConfig,
+  isAIConfigured,
+  listAIEventConfigs,
+  listAIJobs,
+  recordClassificationSignal,
+  runAIAssemblyJob,
+  upsertAIEventConfig,
+  getAIEventConfig
+} from "./ai-service.js";
+import {
   MAX_TEMPLATE_BODY_MARKDOWN,
   buildFieldsForRender,
   createUserDocumentTemplate,
@@ -2638,6 +2648,74 @@ app.post("/dev/regression-check", async (request, reply) => {
 
 const port = Number(process.env.PORT ?? 4000);
 const host = process.env.WC_API_HOST?.trim() || "127.0.0.1";
+
+// ── AI event configs and jobs ──────────────────────────────────────────────────
+
+app.get("/api/ai/status", async () => ({
+  ok: true,
+  configured: isAIConfigured()
+}));
+
+app.get("/api/cases/:caseId/ai/event-configs", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId);
+  if (!caseExists) return reply.code(404).send({ ok: false, error: "case not found" });
+  return { ok: true, configs: listAIEventConfigs(db, caseId) };
+});
+
+app.post("/api/cases/:caseId/ai/event-configs", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as {
+    event_type?: string;
+    event_label?: string;
+    instructions?: string;
+    exhibit_strategy_json?: string | null;
+  } | undefined;
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId);
+  if (!caseExists) return reply.code(404).send({ ok: false, error: "case not found" });
+  if (!body?.event_type?.trim()) return reply.code(400).send({ ok: false, error: "event_type is required" });
+  if (!body?.event_label?.trim()) return reply.code(400).send({ ok: false, error: "event_label is required" });
+
+  const config = upsertAIEventConfig(db, {
+    caseId,
+    eventType: body.event_type.trim(),
+    eventLabel: body.event_label.trim(),
+    instructions: body.instructions?.trim() ?? "",
+    exhibitStrategyJson: body.exhibit_strategy_json ?? null
+  });
+  return { ok: true, config };
+});
+
+app.delete("/api/cases/:caseId/ai/event-configs/:configId", async (request, reply) => {
+  const { configId } = request.params as { configId: string };
+  if (!deleteAIEventConfig(db, configId)) {
+    return reply.code(404).send({ ok: false, error: "config not found" });
+  }
+  return { ok: true };
+});
+
+app.post("/api/cases/:caseId/ai/assemble", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as { event_type?: string } | undefined;
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId);
+  if (!caseExists) return reply.code(404).send({ ok: false, error: "case not found" });
+  const assemblyEventType = body?.event_type?.trim();
+  if (!assemblyEventType) return reply.code(400).send({ ok: false, error: "event_type is required" });
+
+  const configs = listAIEventConfigs(db, caseId);
+  const config = configs.find((c) => c.event_type === assemblyEventType);
+  if (!config) return reply.code(404).send({ ok: false, error: "no config for this event type" });
+
+  const job = await runAIAssemblyJob(db, { caseId, eventType: assemblyEventType, config });
+  return { ok: true, job };
+});
+
+app.get("/api/cases/:caseId/ai/jobs", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId);
+  if (!caseExists) return reply.code(404).send({ ok: false, error: "case not found" });
+  return { ok: true, jobs: listAIJobs(db, caseId) };
+});
 
 export { app };
 

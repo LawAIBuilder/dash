@@ -954,5 +954,59 @@ export const authoritativeMigrations: AuthoritativeMigration[] = [
         WHERE updated_at IS NULL OR updated_at = '';
       `);
     }
+  },
+  {
+    id: "0014_ai_jobs_and_classification_learning",
+    description: "AI job system for event-driven packet assembly and classification learning from user actions",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS ai_event_configs (
+          id TEXT PRIMARY KEY,
+          case_id TEXT REFERENCES cases(id) ON DELETE CASCADE,
+          event_type TEXT NOT NULL,
+          event_label TEXT NOT NULL,
+          instructions TEXT NOT NULL DEFAULT '',
+          exhibit_strategy_json TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_event_configs_case ON ai_event_configs(case_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_event_configs_type ON ai_event_configs(case_id, event_type)
+          WHERE case_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS ai_jobs (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+          event_type TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          input_json TEXT,
+          output_json TEXT,
+          error_message TEXT,
+          model TEXT,
+          prompt_tokens INTEGER,
+          completion_tokens INTEGER,
+          started_at TEXT,
+          completed_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_ai_jobs_case ON ai_jobs(case_id);
+        CREATE INDEX IF NOT EXISTS idx_ai_jobs_status ON ai_jobs(status);
+
+        CREATE TABLE IF NOT EXISTS classification_signals (
+          id TEXT PRIMARY KEY,
+          source_item_id TEXT NOT NULL REFERENCES source_items(id) ON DELETE CASCADE,
+          signal_type TEXT NOT NULL,
+          folder_path TEXT,
+          filename TEXT,
+          document_type_id TEXT REFERENCES document_types(id) ON DELETE SET NULL,
+          document_type_name TEXT,
+          exhibit_label TEXT,
+          actor TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_classification_signals_type ON classification_signals(document_type_id);
+      `);
+    }
   }
 ];

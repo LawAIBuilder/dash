@@ -6,10 +6,10 @@ type ExhibitPacketMode = "compact" | "full";
 type SuggestionResolutionAction = "accept" | "dismiss";
 
 const DEFAULT_SECTIONS = [
-  { key: "employee", label: "Employee Exhibits" },
-  { key: "employer", label: "Employer/Insurer Exhibits" },
-  { key: "joint", label: "Joint Exhibits" }
+  { key: "employee", label: "Employee Exhibits" }
 ] as const;
+
+const DEFAULT_EXHIBIT_SLOT_COUNT = 5;
 
 function nowIso() {
   return new Date().toISOString();
@@ -597,6 +597,7 @@ export function createExhibitPacket(
     packetName?: string | null;
     packetMode?: ExhibitPacketMode | null;
     namingScheme?: string | null;
+    starterSlotCount?: number | null;
   }
 ) {
   const packetId = randomUUID();
@@ -632,7 +633,10 @@ export function createExhibitPacket(
       `
     ).run(packetId, input.caseId, packetName, packetMode, namingScheme);
 
+    const sectionIds: string[] = [];
     DEFAULT_SECTIONS.forEach((section, index) => {
+      const sectionId = randomUUID();
+      sectionIds.push(sectionId);
       db.prepare(
         `
           INSERT INTO exhibit_sections
@@ -640,15 +644,31 @@ export function createExhibitPacket(
           VALUES
             (?, ?, ?, ?, ?)
         `
-      ).run(randomUUID(), packetId, section.key, section.label, index);
+      ).run(sectionId, packetId, section.key, section.label, index);
     });
+
+    const starterCount = input.starterSlotCount ?? DEFAULT_EXHIBIT_SLOT_COUNT;
+    const employeeSectionId = sectionIds[0];
+    if (employeeSectionId && starterCount > 0) {
+      for (let i = 0; i < starterCount; i++) {
+        const label = namingScheme === "numbers" ? String(i + 1) : String.fromCharCode(65 + i);
+        db.prepare(
+          `
+            INSERT INTO exhibits
+              (id, exhibit_section_id, exhibit_label, status, sort_order)
+            VALUES
+              (?, ?, ?, 'draft', ?)
+          `
+        ).run(randomUUID(), employeeSectionId, label, i);
+      }
+    }
 
     recordHistory(db, {
       packetId,
       actionType: "packet_created",
       targetType: "packet",
       targetId: packetId,
-      payload: { packet_name: packetName, packet_mode: packetMode, naming_scheme: namingScheme }
+      payload: { packet_name: packetName, packet_mode: packetMode, naming_scheme: namingScheme, starter_slots: starterCount }
     });
   })();
 
@@ -1065,6 +1085,10 @@ export function addExhibitItem(
         SELECT
           id,
           case_id,
+          title,
+          document_type_id,
+          document_type_name,
+          raw_json,
           json_extract(raw_json, '$.canonical_document_id') AS canonical_document_id
         FROM source_items
         WHERE id = ?
@@ -1075,6 +1099,10 @@ export function addExhibitItem(
     | {
         id: string;
         case_id: string;
+        title: string | null;
+        document_type_id: string | null;
+        document_type_name: string | null;
+        raw_json: string | null;
         canonical_document_id: string | null;
       }
     | undefined;
@@ -1140,6 +1168,36 @@ export function addExhibitItem(
       targetId: exhibitItemId,
       payload: { exhibit_id: input.exhibitId, source_item_id: input.sourceItemId }
     });
+
+    let folderPath: string | null = null;
+    try {
+      const raw = sourceItem.raw_json ? JSON.parse(sourceItem.raw_json) : null;
+      const entries = raw?.path_collection?.entries;
+      if (Array.isArray(entries)) {
+        folderPath = entries
+          .filter((e: { id?: string }) => e.id !== "0")
+          .map((e: { name?: string; id?: string }) => e.name ?? e.id ?? "")
+          .join("/");
+      }
+    } catch {}
+
+    const exhibitRow = db
+      .prepare(`SELECT exhibit_label FROM exhibits WHERE id = ?`)
+      .get(input.exhibitId) as { exhibit_label: string } | undefined;
+
+    db.prepare(
+      `INSERT INTO classification_signals
+         (id, source_item_id, signal_type, folder_path, filename, document_type_id, document_type_name, exhibit_label)
+       VALUES (?, ?, 'exhibit_assignment', ?, ?, ?, ?, ?)`
+    ).run(
+      randomUUID(),
+      input.sourceItemId,
+      folderPath,
+      sourceItem.title,
+      sourceItem.document_type_id,
+      sourceItem.document_type_name,
+      exhibitRow?.exhibit_label ?? null
+    );
   })();
 
   return {
