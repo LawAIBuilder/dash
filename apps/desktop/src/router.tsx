@@ -8,6 +8,8 @@ import { CaseOverviewPage } from "@/pages/cases/CaseOverviewPage";
 import { CaseReviewPage } from "@/pages/cases/CaseReviewPage";
 import { CaseTemplatesPage } from "@/pages/cases/CaseTemplatesPage";
 import { CaseAIPage } from "@/pages/cases/CaseAIPage";
+import { CasePackagesPage } from "@/pages/cases/CasePackagesPage";
+import { CasePeoplePage } from "@/pages/cases/CasePeoplePage";
 import { RouteErrorPage } from "@/pages/RouteErrorPage";
 
 export const router = createBrowserRouter([
@@ -35,6 +37,14 @@ export const router = createBrowserRouter([
       {
         path: "cases/:caseId/review",
         element: <CaseReviewPage />
+      },
+      {
+        path: "cases/:caseId/people",
+        element: <CasePeoplePage />
+      },
+      {
+        path: "cases/:caseId/packages",
+        element: <CasePackagesPage />
       },
       {
         path: "cases/:caseId/connections",

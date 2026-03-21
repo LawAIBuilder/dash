@@ -81,6 +81,18 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+    /* Legal workbench: paper field, restrained accent */
+    --workbench-paper: oklch(0.99 0.004 95);
+    --workbench-ink: oklch(0.22 0.02 260);
+    --workbench-accent: oklch(0.42 0.12 250);
+}
+
+.workbench-sidebar {
+    background: linear-gradient(180deg, oklch(0.995 0.002 95) 0%, oklch(0.985 0.005 95) 100%);
+}
+
+.workbench-header {
+    background: oklch(0.998 0.003 95 / 0.92);
 }
 
 .dark {
@@ -122,7 +134,8 @@
     @apply border-border outline-ring/50;
     }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-[var(--workbench-paper)] text-foreground antialiased;
+    color: var(--workbench-ink);
     }
   html {
     @apply font-sans;

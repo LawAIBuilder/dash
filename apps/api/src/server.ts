@@ -1,5 +1,8 @@
+import multipart from "@fastify/multipart";
 import cors from "@fastify/cors";
 import Fastify from "fastify";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -100,8 +103,19 @@ import {
   recordClassificationSignal,
   runAIAssemblyJob,
   upsertAIEventConfig,
-  getAIEventConfig
+  getAIEventConfig,
+  runPackageWorker,
+  listPackageRunsForPacket,
+  getPackageRun
 } from "./ai-service.js";
+import { markdownishToDocxBuffer } from "./docx-export.js";
+import { persistCaseUploadAndIngest } from "./matter-upload.js";
+import {
+  buildPackageBundle,
+  gatherDocumentSummaries,
+  getFullCanonicalTextForSourceItem,
+  getPageChunks
+} from "./retrieval.js";
 import {
   MAX_TEMPLATE_BODY_MARKDOWN,
   buildFieldsForRender,
@@ -171,6 +185,11 @@ const configuredOrigins = process.env.WC_CORS_ORIGIN?.split(",")
   .filter((origin) => origin.length > 0);
 await app.register(cors, {
   origin: configuredOrigins && configuredOrigins.length > 0 ? configuredOrigins : ["http://127.0.0.1:5173", "http://localhost:5173"]
+});
+await app.register(multipart, {
+  limits: {
+    fileSize: Number(process.env.WC_UPLOAD_MAX_BYTES ?? 45 * 1024 * 1024)
+  }
 });
 
 const WC_API_KEY = process.env.WC_API_KEY?.trim();
@@ -971,6 +990,10 @@ app.post("/api/cases/:caseId/exhibit-packets", async (request, reply) => {
         packet_name?: string;
         packet_mode?: "compact" | "full";
         naming_scheme?: string;
+        package_type?: string;
+        package_label?: string;
+        target_document_source_item_id?: string;
+        starter_slot_count?: number;
       }
     | undefined;
   const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
@@ -980,11 +1003,23 @@ app.post("/api/cases/:caseId/exhibit-packets", async (request, reply) => {
     return reply.code(404).send({ ok: false, error: "case not found" });
   }
 
+  const pkgType = body?.package_type?.trim() ?? "hearing_packet";
+  const starterSlots =
+    body?.starter_slot_count !== undefined
+      ? body.starter_slot_count
+      : pkgType === "hearing_packet"
+        ? undefined
+        : 0;
+
   const packet = createExhibitPacket(db, {
     caseId,
     packetName: body?.packet_name ?? null,
     packetMode: body?.packet_mode ?? null,
-    namingScheme: body?.naming_scheme ?? null
+    namingScheme: body?.naming_scheme ?? null,
+    packageType: pkgType,
+    packageLabel: body?.package_label ?? null,
+    targetDocumentSourceItemId: body?.target_document_source_item_id ?? null,
+    starterSlotCount: starterSlots
   });
   if (!packet.ok) {
     return reply.code(400).send({ ok: false, error: packet.error });
@@ -1001,21 +1036,32 @@ app.patch("/api/exhibit-packets/:packetId", async (request, reply) => {
         packet_mode?: "compact" | "full" | null;
         naming_scheme?: string | null;
         status?: "draft" | "needs_review" | "ready" | "finalized" | "exported" | "archived" | null;
+        package_type?: string | null;
+        package_label?: string | null;
+        target_document_source_item_id?: string | null;
+        run_status?: string | null;
       }
     | undefined;
 
-  const packet = updateExhibitPacket(db, {
+  const updated = updateExhibitPacket(db, {
     packetId,
     packetName: body?.packet_name,
     packetMode: body?.packet_mode ?? undefined,
     namingScheme: body?.naming_scheme,
-    status: body?.status ?? undefined
+    status: body?.status ?? undefined,
+    packageType: body?.package_type,
+    packageLabel: body?.package_label,
+    targetDocumentSourceItemId: body?.target_document_source_item_id,
+    runStatus: body?.run_status
   });
-  if (!packet) {
+  if (updated && typeof updated === "object" && "ok" in updated && updated.ok === false) {
+    return reply.code(404).send({ ok: false, error: updated.error });
+  }
+  if (!updated) {
     return reply.code(404).send({ ok: false, error: "packet not found" });
   }
 
-  return { ok: true, packet };
+  return { ok: true, packet: updated };
 });
 
 app.post("/api/exhibit-packets/:packetId/sections", async (request, reply) => {
@@ -2759,6 +2805,351 @@ app.post("/dev/regression-check", async (request, reply) => {
     regression_id: recorded.regressionId,
     manifest_id: manifest.manifestId,
     regression_summary: manifest.summary
+  };
+});
+
+function resolvePackageExportDir() {
+  const env = process.env.WC_EXPORT_DIR?.trim();
+  if (env) return env;
+  return join(process.cwd(), "data", "exports");
+}
+
+function assertCaseExists(
+  caseId: string,
+  reply: { code: (c: number) => { send: (b: unknown) => unknown } }
+): boolean {
+  const row = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as { id: string } | undefined;
+  if (!row) {
+    void reply.code(404).send({ ok: false, error: "case not found" });
+    return false;
+  }
+  return true;
+}
+
+// ── Package workbench: uploads, rules, golden examples, retrieval, package runs ─
+
+app.post("/api/cases/:caseId/uploads", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+
+  const file = await request.file();
+  if (!file) {
+    return reply.code(400).send({ ok: false, error: "file is required" });
+  }
+  const buffer = await file.toBuffer();
+  const result = await persistCaseUploadAndIngest(db, {
+    caseId,
+    filename: file.filename || "upload",
+    mimeType: file.mimetype,
+    buffer
+  });
+  if (!result.ok) {
+    return reply.code(400).send(result);
+  }
+  return {
+    ok: true,
+    case_id: caseId,
+    source_item_id: result.source_item_id,
+    normalization: result.normalization
+  };
+});
+
+app.get("/api/cases/:caseId/people", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  const people = db
+    .prepare(
+      `
+        SELECT id, name, role, organization, address, phone, email, pp_contact_id, notes, created_at
+        FROM case_people
+        WHERE case_id = ?
+        ORDER BY name ASC
+      `
+    )
+    .all(caseId);
+  return { ok: true, people };
+});
+
+app.get("/api/cases/:caseId/timeline", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  const projection = buildCaseProjection(db, caseId);
+  if (!projection) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+  return {
+    ok: true,
+    entries: projection.slices.case_timeline_slice.entries,
+    summary: projection.slices.case_timeline_slice.summary
+  };
+});
+
+app.get("/api/cases/:caseId/package-rules", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const q = request.query as { package_type?: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!q?.package_type?.trim()) {
+    return reply.code(400).send({ ok: false, error: "package_type query parameter is required" });
+  }
+  const rules = db
+    .prepare(
+      `
+        SELECT * FROM package_rules
+        WHERE case_id = ? AND package_type = ?
+        ORDER BY sort_order ASC, rule_key ASC
+      `
+    )
+    .all(caseId, q.package_type.trim());
+  return { ok: true, rules };
+});
+
+app.post("/api/cases/:caseId/package-rules", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as
+    | {
+        package_type?: string;
+        rule_key?: string;
+        rule_label?: string;
+        instructions?: string;
+        sort_order?: number;
+      }
+    | undefined;
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!body?.package_type?.trim() || !body.rule_key?.trim() || !body.rule_label?.trim()) {
+    return reply.code(400).send({ ok: false, error: "package_type, rule_key, and rule_label are required" });
+  }
+  const id = randomUUID();
+  try {
+    db.prepare(
+      `
+        INSERT INTO package_rules (id, case_id, package_type, rule_key, rule_label, instructions, sort_order)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `
+    ).run(
+      id,
+      caseId,
+      body.package_type.trim(),
+      body.rule_key.trim(),
+      body.rule_label.trim(),
+      body.instructions?.trim() ?? "",
+      body.sort_order ?? 0
+    );
+  } catch {
+    return reply.code(400).send({ ok: false, error: "rule already exists or invalid" });
+  }
+  const row = db.prepare(`SELECT * FROM package_rules WHERE id = ?`).get(id);
+  return { ok: true, rule: row };
+});
+
+app.patch("/api/package-rules/:ruleId", async (request, reply) => {
+  const { ruleId } = request.params as { ruleId: string };
+  const body = request.body as {
+    rule_label?: string;
+    instructions?: string;
+    sort_order?: number;
+  };
+  const existing = db.prepare(`SELECT case_id FROM package_rules WHERE id = ?`).get(ruleId) as { case_id: string } | undefined;
+  if (!existing) {
+    return reply.code(404).send({ ok: false, error: "rule not found" });
+  }
+  const updates: string[] = [];
+  const params: Array<string | number | null> = [];
+  if (body.rule_label !== undefined) {
+    updates.push("rule_label = ?");
+    params.push(body.rule_label);
+  }
+  if (body.instructions !== undefined) {
+    updates.push("instructions = ?");
+    params.push(body.instructions);
+  }
+  if (body.sort_order !== undefined) {
+    updates.push("sort_order = ?");
+    params.push(body.sort_order);
+  }
+  if (updates.length === 0) {
+    return reply.code(400).send({ ok: false, error: "no updates" });
+  }
+  updates.push("updated_at = CURRENT_TIMESTAMP");
+  db.prepare(`UPDATE package_rules SET ${updates.join(", ")} WHERE id = ?`).run(...params, ruleId);
+  return { ok: true, rule: db.prepare(`SELECT * FROM package_rules WHERE id = ?`).get(ruleId) };
+});
+
+app.delete("/api/package-rules/:ruleId", async (request, reply) => {
+  const { ruleId } = request.params as { ruleId: string };
+  const run = db.prepare(`DELETE FROM package_rules WHERE id = ?`).run(ruleId);
+  if (run.changes === 0) {
+    return reply.code(404).send({ ok: false, error: "rule not found" });
+  }
+  return { ok: true };
+});
+
+app.get("/api/cases/:caseId/golden-examples", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const q = request.query as { package_type?: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  const where = q?.package_type?.trim()
+    ? `WHERE (case_id IS NULL OR case_id = ?) AND package_type = ?`
+    : `WHERE case_id IS NULL OR case_id = ?`;
+  const rows = q?.package_type?.trim()
+    ? db.prepare(`SELECT * FROM golden_examples ${where} ORDER BY updated_at DESC`).all(caseId, q.package_type.trim())
+    : db.prepare(`SELECT * FROM golden_examples ${where} ORDER BY updated_at DESC`).all(caseId);
+  return { ok: true, golden_examples: rows };
+});
+
+app.post("/api/cases/:caseId/golden-examples", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as {
+    package_type?: string;
+    label?: string;
+    summary?: string;
+    source_item_ids_json?: string;
+    metadata_json?: string;
+  };
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!body.package_type?.trim()) {
+    return reply.code(400).send({ ok: false, error: "package_type is required" });
+  }
+  const id = randomUUID();
+  db.prepare(
+    `
+      INSERT INTO golden_examples (id, case_id, package_type, label, summary, source_item_ids_json, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `
+  ).run(
+    id,
+    caseId,
+    body.package_type.trim(),
+    body.label?.trim() ?? null,
+    body.summary?.trim() ?? null,
+    body.source_item_ids_json ?? null,
+    body.metadata_json ?? null
+  );
+  return { ok: true, golden_example: db.prepare(`SELECT * FROM golden_examples WHERE id = ?`).get(id) };
+});
+
+app.delete("/api/golden-examples/:exampleId", async (request, reply) => {
+  const { exampleId } = request.params as { exampleId: string };
+  const run = db.prepare(`DELETE FROM golden_examples WHERE id = ?`).run(exampleId);
+  if (run.changes === 0) {
+    return reply.code(404).send({ ok: false, error: "not found" });
+  }
+  return { ok: true };
+});
+
+app.post("/api/cases/:caseId/retrieval/test", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as {
+    mode?: string;
+    package_type?: string;
+    source_item_id?: string;
+    page_start?: number;
+    page_end?: number;
+  };
+  if (!assertCaseExists(caseId, reply)) return;
+  const mode = body.mode ?? "summary";
+  const packageType = body.package_type?.trim() ?? "hearing_packet";
+
+  if (mode === "summary") {
+    return {
+      ok: true,
+      mode,
+      summaries: gatherDocumentSummaries(db, caseId)
+    };
+  }
+  if ((mode === "document" || mode === "chunk") && body.source_item_id) {
+    const ownerCheck = db
+      .prepare(`SELECT id FROM source_items WHERE id = ? AND case_id = ? LIMIT 1`)
+      .get(body.source_item_id, caseId) as { id: string } | undefined;
+    if (!ownerCheck) {
+      return reply.code(404).send({ ok: false, error: "source item not found for this case" });
+    }
+  }
+  if (mode === "document" && body.source_item_id) {
+    const full = getFullCanonicalTextForSourceItem(db, body.source_item_id);
+    return { ok: true, mode, document: full };
+  }
+  if (mode === "chunk" && body.source_item_id && body.page_start && body.page_end) {
+    const chunks = getPageChunks(db, {
+      sourceItemId: body.source_item_id,
+      pageStart: body.page_start,
+      pageEnd: body.page_end
+    });
+    return { ok: true, mode, chunks };
+  }
+  if (mode === "bundle") {
+    const bundle = buildPackageBundle(db, {
+      caseId,
+      packageType,
+      wholeFileSourceItemIds: body.source_item_id ? [body.source_item_id] : []
+    });
+    return { ok: true, mode, bundle };
+  }
+  return reply.code(400).send({ ok: false, error: "invalid mode or missing parameters" });
+});
+
+app.post("/api/cases/:caseId/exhibit-packets/:packetId/package-runs", async (request, reply) => {
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
+  const body = request.body as { whole_file_source_item_ids?: string[] } | undefined;
+  if (!assertCaseExists(caseId, reply)) return;
+  const run = await runPackageWorker(db, {
+    caseId,
+    packetId,
+    wholeFileSourceItemIds: body?.whole_file_source_item_ids
+  });
+  return { ok: true, run };
+});
+
+app.get("/api/exhibit-packets/:packetId/package-runs", async (request, reply) => {
+  const { packetId } = request.params as { packetId: string };
+  const packetCase = getPacketCaseId(db, packetId);
+  if (!packetCase) {
+    return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+  return { ok: true, runs: listPackageRunsForPacket(db, packetId) };
+});
+
+app.get("/api/package-runs/:runId", async (request, reply) => {
+  const { runId } = request.params as { runId: string };
+  const row = db
+    .prepare(
+      `
+        SELECT pr.*, ep.case_id
+        FROM package_runs pr
+        JOIN exhibit_packets ep ON ep.id = pr.packet_id
+        WHERE pr.id = ?
+      `
+    )
+    .get(runId) as Record<string, unknown> | undefined;
+  if (!row) {
+    return reply.code(404).send({ ok: false, error: "run not found" });
+  }
+  return { ok: true, run: row };
+});
+
+app.post("/api/package-runs/:runId/export-docx", async (request, reply) => {
+  const { runId } = request.params as { runId: string };
+  const run = getPackageRun(db, runId);
+  if (!run || !run.output_json) {
+    return reply.code(404).send({ ok: false, error: "run not found or incomplete" });
+  }
+  let draft = "";
+  try {
+    const parsed = JSON.parse(run.output_json) as { draft_markdown?: string };
+    draft = parsed.draft_markdown ?? run.output_json;
+  } catch {
+    draft = run.output_json;
+  }
+  const buf = await markdownishToDocxBuffer(draft);
+  const dir = resolvePackageExportDir();
+  await mkdir(dir, { recursive: true });
+  const filename = `package-run-${runId}.docx`;
+  const abs = join(dir, filename);
+  await writeFile(abs, buf);
+  return {
+    ok: true,
+    path: abs,
+    filename,
+    bytes: buf.length
   };
 });
 

@@ -1008,5 +1008,98 @@ export const authoritativeMigrations: AuthoritativeMigration[] = [
         CREATE INDEX IF NOT EXISTS idx_classification_signals_type ON classification_signals(document_type_id);
       `);
     }
+  },
+  {
+    id: "0015_package_workbench",
+    description: "Package types, rules, upload connector seed, exhibit packet extensions",
+    up(db) {
+      addColumnIfMissing(db, "exhibit_packets", "package_type", "package_type TEXT NOT NULL DEFAULT 'hearing_packet'");
+      addColumnIfMissing(db, "exhibit_packets", "package_label", "package_label TEXT");
+      addColumnIfMissing(
+        db,
+        "exhibit_packets",
+        "target_document_source_item_id",
+        "target_document_source_item_id TEXT REFERENCES source_items(id) ON DELETE SET NULL"
+      );
+      addColumnIfMissing(db, "exhibit_packets", "run_status", "run_status TEXT");
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS package_rules (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+          package_type TEXT NOT NULL,
+          rule_key TEXT NOT NULL,
+          rule_label TEXT NOT NULL,
+          instructions TEXT NOT NULL DEFAULT '',
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(case_id, package_type, rule_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_package_rules_case ON package_rules(case_id);
+      `);
+
+      const uploadConnId = "a0000001-0000-4000-8000-000000000001";
+      const existing = db.prepare(`SELECT id FROM source_connections WHERE id = ?`).get(uploadConnId) as
+        | { id: string }
+        | undefined;
+      if (!existing) {
+        db.prepare(
+          `
+            INSERT INTO source_connections
+              (id, provider, account_label, auth_mode, scopes, status, last_verified_at, metadata_json, updated_at)
+            VALUES
+              (?, 'matter_upload', 'Matter uploads', 'local_upload', '[]', 'active', CURRENT_TIMESTAMP, '{}', CURRENT_TIMESTAMP)
+          `
+        ).run(uploadConnId);
+      }
+    }
+  },
+  {
+    id: "0016_golden_examples",
+    description: "Golden exemplar packages for retrieval-guided drafting",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS golden_examples (
+          id TEXT PRIMARY KEY,
+          case_id TEXT REFERENCES cases(id) ON DELETE SET NULL,
+          package_type TEXT NOT NULL,
+          label TEXT,
+          summary TEXT,
+          source_item_ids_json TEXT,
+          metadata_json TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_golden_examples_pkg ON golden_examples(package_type);
+        CREATE INDEX IF NOT EXISTS idx_golden_examples_case ON golden_examples(case_id);
+      `);
+    }
+  },
+  {
+    id: "0017_package_runs",
+    description: "Package worker runs with structured outputs",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS package_runs (
+          id TEXT PRIMARY KEY,
+          packet_id TEXT NOT NULL REFERENCES exhibit_packets(id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'pending',
+          input_json TEXT,
+          output_json TEXT,
+          citations_json TEXT,
+          error_message TEXT,
+          model TEXT,
+          prompt_tokens INTEGER,
+          completion_tokens INTEGER,
+          retrieval_warnings_json TEXT,
+          started_at TEXT,
+          completed_at TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_package_runs_packet ON package_runs(packet_id);
+        CREATE INDEX IF NOT EXISTS idx_package_runs_status ON package_runs(status);
+      `);
+    }
   }
 ];

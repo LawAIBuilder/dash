@@ -257,7 +257,15 @@ export async function getExhibitWorkspace(caseId: string): Promise<ExhibitPacket
 
 export async function createExhibitPacket(
   caseId: string,
-  input?: { packet_name?: string; packet_mode?: "compact" | "full"; naming_scheme?: string }
+  input?: {
+    packet_name?: string;
+    packet_mode?: "compact" | "full";
+    naming_scheme?: string;
+    package_type?: string;
+    package_label?: string;
+    target_document_source_item_id?: string;
+    starter_slot_count?: number;
+  }
 ) {
   const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/exhibit-packets`), {
     method: "POST",
@@ -269,7 +277,16 @@ export async function createExhibitPacket(
 
 export async function updateExhibitPacket(
   packetId: string,
-  input: { packet_name?: string; packet_mode?: "compact" | "full"; naming_scheme?: string; status?: string }
+  input: {
+    packet_name?: string;
+    packet_mode?: "compact" | "full";
+    naming_scheme?: string;
+    status?: string;
+    package_type?: string;
+    package_label?: string;
+    target_document_source_item_id?: string;
+    run_status?: string;
+  }
 ) {
   const response = await fetch(apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}`), {
     method: "PATCH",
@@ -671,3 +688,105 @@ export async function listAIJobs(caseId: string) {
   const payload = await readJson<{ ok: true; jobs: AIJob[] }>(response);
   return payload.jobs;
 }
+
+// ── Package workbench (uploads, rules, runs) ──────────────────────────────
+
+export interface PackageRule {
+  id: string;
+  case_id: string;
+  package_type: string;
+  rule_key: string;
+  rule_label: string;
+  instructions: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PackageRun {
+  id: string;
+  packet_id: string;
+  status: string;
+  input_json: string | null;
+  output_json: string | null;
+  citations_json: string | null;
+  error_message: string | null;
+  model: string | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  retrieval_warnings_json: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export async function uploadCaseFile(caseId: string, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/uploads`), {
+    method: "POST",
+    headers: buildApiHeaders(),
+    body: form
+  });
+  return readJson<{ ok: true; source_item_id: string; normalization: unknown }>(response);
+}
+
+export async function listPackageRules(caseId: string, packageType: string) {
+  const response = await fetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/package-rules?package_type=${encodeURIComponent(packageType)}`),
+    { headers: buildApiHeaders() }
+  );
+  const payload = await readJson<{ ok: true; rules: PackageRule[] }>(response);
+  return payload.rules;
+}
+
+export async function createPackageRule(
+  caseId: string,
+  input: { package_type: string; rule_key: string; rule_label: string; instructions?: string; sort_order?: number }
+) {
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/package-rules`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input)
+  });
+  const payload = await readJson<{ ok: true; rule: PackageRule }>(response);
+  return payload.rule;
+}
+
+export async function deletePackageRule(ruleId: string) {
+  const response = await fetch(apiUrl(`/api/package-rules/${encodeURIComponent(ruleId)}`), {
+    method: "DELETE",
+    headers: buildApiHeaders()
+  });
+  return readJson<{ ok: true }>(response);
+}
+
+export async function listPackageRuns(packetId: string) {
+  const response = await fetch(apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}/package-runs`), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ ok: true; runs: PackageRun[] }>(response);
+  return payload.runs;
+}
+
+export async function runPackageWorker(caseId: string, packetId: string, wholeFileSourceItemIds?: string[]) {
+  const response = await fetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/exhibit-packets/${encodeURIComponent(packetId)}/package-runs`),
+    {
+      method: "POST",
+      headers: buildApiHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ whole_file_source_item_ids: wholeFileSourceItemIds })
+    }
+  );
+  const payload = await readJson<{ ok: true; run: PackageRun }>(response);
+  return payload.run;
+}
+
+export async function exportPackageRunDocx(runId: string) {
+  const response = await fetch(apiUrl(`/api/package-runs/${encodeURIComponent(runId)}/export-docx`), {
+    method: "POST",
+    headers: buildApiHeaders()
+  });
+  return readJson<{ ok: true; path: string; filename: string; bytes: number }>(response);
+}
+

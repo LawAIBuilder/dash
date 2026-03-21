@@ -1,4 +1,6 @@
 import type Database from "better-sqlite3";
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { createWorker } from "tesseract.js";
 import { createBoxClient, downloadBoxFileContent, resolveBoxProviderConfig } from "./box-provider.js";
 import { extractPdfPageText, rasterizePdfPageToPng } from "./pdf-rasterize.js";
@@ -104,6 +106,20 @@ function finalizeAttempt(
   })();
 }
 
+function resolveLocalAssetPath(authoritativeAssetUri: string | null): string | null {
+  if (!authoritativeAssetUri) {
+    return null;
+  }
+  if (authoritativeAssetUri.startsWith("file://")) {
+    try {
+      return fileURLToPath(authoritativeAssetUri);
+    } catch {
+      return null;
+    }
+  }
+  return authoritativeAssetUri;
+}
+
 function looksLikePdf(buffer: Buffer): boolean {
   if (buffer.length < 5) {
     return false;
@@ -143,43 +159,70 @@ export async function processOneOcrAttempt(db: Database.Database, deps?: OcrWork
   }
 
   const ctx = resolvePageAssetContext(db, claim.canonical_page_id);
-  if (!ctx || !ctx.sourceItemId || !ctx.remoteId) {
+  if (!ctx || !ctx.sourceItemId) {
     finalizeAttempt(db, claim.id, claim.canonical_page_id, {
       ok: false,
       engine: claim.engine,
-      message: "Could not resolve source item / remote id for canonical page"
-    });
-    return true;
-  }
-
-  if (ctx.provider !== "box") {
-    finalizeAttempt(db, claim.id, claim.canonical_page_id, {
-      ok: false,
-      engine: claim.engine,
-      message: `Provider ${ctx.provider ?? "unknown"} not supported by OCR worker`
-    });
-    return true;
-  }
-
-  const config = resolveBoxProviderConfig();
-  if (!config) {
-    finalizeAttempt(db, claim.id, claim.canonical_page_id, {
-      ok: false,
-      engine: claim.engine,
-      message: "Box JWT config missing (BOX_JWT_CONFIG_JSON / BOX_JWT_CONFIG_FILE)"
+      message: "Could not resolve source item for canonical page"
     });
     return true;
   }
 
   let buffer: Buffer;
-  try {
-    const client = deps?.boxClient ?? createBoxClient(config).client;
-    buffer = await downloadBoxFileContent(client, ctx.remoteId);
-  } catch (error) {
+  if (ctx.provider === "matter_upload") {
+    const localPath = resolveLocalAssetPath(ctx.authoritativeAssetUri);
+    if (!localPath) {
+      finalizeAttempt(db, claim.id, claim.canonical_page_id, {
+        ok: false,
+        engine: claim.engine,
+        message: "Upload asset path missing for OCR"
+      });
+      return true;
+    }
+    try {
+      buffer = await readFile(localPath);
+    } catch (error) {
+      finalizeAttempt(db, claim.id, claim.canonical_page_id, {
+        ok: false,
+        engine: claim.engine,
+        message: error instanceof Error ? error.message : "Failed to read uploaded file"
+      });
+      return true;
+    }
+  } else if (ctx.provider === "box") {
+    if (!ctx.remoteId) {
+      finalizeAttempt(db, claim.id, claim.canonical_page_id, {
+        ok: false,
+        engine: claim.engine,
+        message: "Box remote id missing for canonical page"
+      });
+      return true;
+    }
+    const config = resolveBoxProviderConfig();
+    if (!config) {
+      finalizeAttempt(db, claim.id, claim.canonical_page_id, {
+        ok: false,
+        engine: claim.engine,
+        message: "Box JWT config missing (BOX_JWT_CONFIG_JSON / BOX_JWT_CONFIG_FILE)"
+      });
+      return true;
+    }
+    try {
+      const client = deps?.boxClient ?? createBoxClient(config).client;
+      buffer = await downloadBoxFileContent(client, ctx.remoteId);
+    } catch (error) {
+      finalizeAttempt(db, claim.id, claim.canonical_page_id, {
+        ok: false,
+        engine: claim.engine,
+        message: error instanceof Error ? error.message : "Box download failed"
+      });
+      return true;
+    }
+  } else {
     finalizeAttempt(db, claim.id, claim.canonical_page_id, {
       ok: false,
       engine: claim.engine,
-      message: error instanceof Error ? error.message : "Box download failed"
+      message: `Provider ${ctx.provider ?? "unknown"} not supported by OCR worker`
     });
     return true;
   }

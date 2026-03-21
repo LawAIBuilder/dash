@@ -238,7 +238,7 @@ describe("exhibit workspace routes", () => {
     expect(second.statusCode).toBe(400);
     expect(second.json()).toEqual({
       ok: false,
-      error: "an active exhibit packet already exists for this case"
+      error: "an active hearing_packet package already exists for this case"
     });
   });
 

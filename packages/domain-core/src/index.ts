@@ -430,6 +430,21 @@ export interface MatterProjectionSlices {
   canonical_page_slice?: ProjectionCanonicalPageSlice;
   canonical_spine_slice?: ProjectionCanonicalSpineSlice;
   extraction_slice?: ProjectionExtractionSlice;
+  case_people_slice?: {
+    people: Array<Record<string, unknown>>;
+    summary?: { total: number };
+  };
+  case_timeline_slice?: {
+    entries: Array<{
+      id: string;
+      kind: string;
+      label: string;
+      detail: string | null;
+      occurred_at: string | null;
+      payload?: Record<string, unknown>;
+    }>;
+    summary?: { total: number };
+  };
 }
 
 export interface MatterProjection {

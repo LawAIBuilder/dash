@@ -193,7 +193,7 @@ function parsePositiveInteger(value: unknown): number | null {
 }
 
 function isNormalizableSourceKind(sourceKind: string) {
-  return sourceKind === "file" || sourceKind === "attachment";
+  return sourceKind === "file" || sourceKind === "attachment" || sourceKind === "upload";
 }
 
 function resolveStubPageCount(rawJson: Record<string, unknown>, override?: number | null) {
@@ -2242,6 +2242,8 @@ export interface PageAssetContext {
   remoteId: string | null;
   mimeType: string | null;
   title: string | null;
+  /** Local filesystem path or file:// URI for matter uploads */
+  authoritativeAssetUri: string | null;
 }
 
 /**
@@ -2258,11 +2260,13 @@ export function resolvePageAssetContext(db: Database.Database, canonicalPageId: 
           si.provider,
           si.remote_id,
           si.mime_type,
-          si.title
+          si.title,
+          sv.authoritative_asset_uri AS authoritative_asset_uri
         FROM canonical_pages cp
         JOIN canonical_documents cd ON cd.id = cp.canonical_doc_id
         LEFT JOIN logical_documents ld ON ld.id = cd.logical_document_id
         LEFT JOIN source_items si ON si.id = ld.source_item_id
+        LEFT JOIN source_versions sv ON sv.id = ld.source_version_id
         WHERE cp.id = ?
         LIMIT 1
       `
@@ -2276,6 +2280,7 @@ export function resolvePageAssetContext(db: Database.Database, canonicalPageId: 
         remote_id: string | null;
         mime_type: string | null;
         title: string | null;
+        authoritative_asset_uri: string | null;
       }
     | undefined;
 
@@ -2290,7 +2295,8 @@ export function resolvePageAssetContext(db: Database.Database, canonicalPageId: 
     provider: row.provider,
     remoteId: row.remote_id,
     mimeType: row.mime_type,
-    title: row.title
+    title: row.title,
+    authoritativeAssetUri: row.authoritative_asset_uri
   };
 }
 
@@ -2308,7 +2314,7 @@ export function normalizeCaseDocumentSpine(
               SELECT id
               FROM source_items
               WHERE case_id = ?
-                AND source_kind IN ('file', 'attachment')
+                AND source_kind IN ('file', 'attachment', 'upload')
               ORDER BY created_at ASC
             `
           )

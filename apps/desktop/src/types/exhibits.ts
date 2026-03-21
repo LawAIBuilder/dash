@@ -64,6 +64,10 @@ export interface ExhibitPacket {
   naming_scheme: string;
   status: string;
   metadata_json?: string | null;
+  package_type?: string;
+  package_label?: string | null;
+  target_document_source_item_id?: string | null;
+  run_status?: string | null;
   created_at: string;
   updated_at: string;
   sections: ExhibitSection[];

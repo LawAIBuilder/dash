@@ -41,7 +41,7 @@ type SourceItem = NonNullable<ReturnType<typeof useProjection>["projection"]>["s
 
 function groupSourceItemsByFolder(sourceItems: SourceItem[]) {
   return sourceItems
-    .filter((item) => item.source_kind === "file")
+    .filter((item) => item.source_kind === "file" || item.source_kind === "upload")
     .reduce<Record<string, SourceItem[]>>((acc, item) => {
       const key = item.folder_path || "Root";
       acc[key] ??= [];
@@ -647,6 +647,21 @@ export function CaseExhibitsPage() {
                   {packet.sections.reduce((sum, section) => sum + section.exhibits.length, 0)} slots
                 </span>
               </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Hearing readiness QA</CardTitle>
+              <CardDescription>Quick checks before finalize or export.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
+                <li>Every exhibit slot has at least one assigned document or an intentional blank.</li>
+                <li>Page exclusions are reviewed for privileged or irrelevant pages.</li>
+                <li>OCR/review queue is clear for documents you are submitting.</li>
+                <li>Packet order matches your hearing outline (sections → slots).</li>
+              </ul>
             </CardContent>
           </Card>
 

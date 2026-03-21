@@ -1,5 +1,17 @@
 import { Link, NavLink, Outlet, useParams } from "react-router-dom";
-import { Bot, FileText, FolderOpen, Home, LayoutTemplate, Link2, ListChecks, RefreshCw, Rows3 } from "lucide-react";
+import {
+  Bot,
+  FileText,
+  FolderOpen,
+  Home,
+  LayoutTemplate,
+  Link2,
+  ListChecks,
+  Package,
+  RefreshCw,
+  Rows3,
+  Users
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -9,10 +21,12 @@ import { useProjection } from "@/hooks/useProjection";
 const matterNav = [
   { to: "", label: "Overview", icon: Home },
   { to: "documents", label: "Documents", icon: FolderOpen },
-  { to: "review", label: "Review Queue", icon: ListChecks },
+  { to: "review", label: "Review", icon: ListChecks },
+  { to: "people", label: "People & Timeline", icon: Users },
+  { to: "packages", label: "Packages", icon: Package },
   { to: "exhibits", label: "Exhibits", icon: Rows3 },
   { to: "templates", label: "Templates", icon: LayoutTemplate },
-  { to: "ai", label: "AI Assembly", icon: Bot },
+  { to: "ai", label: "Package runs (AI)", icon: Bot },
   { to: "connections", label: "Connections", icon: Link2 }
 ];
 
@@ -22,9 +36,9 @@ export function AppShell() {
   const matterName = projection?.slices.case_header?.name ?? "Matter";
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-[var(--workbench-paper)] text-foreground">
       <div className="grid min-h-screen lg:grid-cols-[280px_1fr]">
-        <aside className="border-r bg-card/70 backdrop-blur">
+        <aside className="workbench-sidebar border-r border-border/80 bg-card/90 backdrop-blur">
           <div className="flex h-full flex-col p-4">
             <div className="mb-6">
               <Link to="/cases" className="flex items-center gap-2">
@@ -32,8 +46,8 @@ export function AppShell() {
                   <FileText className="size-5" />
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-muted-foreground">WC Legal Prep</div>
-                  <div className="text-lg font-semibold">Matter Workspace</div>
+                  <div className="text-muted-foreground text-sm font-medium">WC Legal Prep</div>
+                  <div className="text-lg font-semibold tracking-tight">Matter workbench</div>
                 </div>
               </Link>
             </div>
@@ -104,11 +118,11 @@ export function AppShell() {
         </aside>
 
         <div className="flex min-h-screen flex-col">
-          <header className="border-b bg-background/80 px-6 py-4 backdrop-blur">
+          <header className="workbench-header border-b border-border/80 bg-card/60 px-6 py-4 backdrop-blur">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <div className="text-sm text-muted-foreground">Workers' compensation hearing prep</div>
-                <h1 className="text-2xl font-semibold">{caseId ? matterName : "Cases"}</h1>
+                <div className="text-muted-foreground text-sm">Workers' compensation · legal workbench</div>
+                <h1 className="text-2xl font-semibold tracking-tight">{caseId ? matterName : "Cases"}</h1>
               </div>
               {caseId ? (
                 <div className="text-right text-sm text-muted-foreground">

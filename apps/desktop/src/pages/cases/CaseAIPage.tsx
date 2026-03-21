@@ -121,9 +121,10 @@ export function CaseAIPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-xl font-semibold">AI assembly</h2>
-        <p className="text-sm text-muted-foreground">
-          Define event types with instructions. The AI reads your case documents and recommends exhibit assembly.
+        <h2 className="text-xl font-semibold tracking-tight">Package runs (event configs)</h2>
+        <p className="text-muted-foreground text-sm">
+          Legacy hearing-oriented AI jobs: event instructions and exhibit recommendations. Prefer{" "}
+          <strong>Packages</strong> for full package worker runs with citations and DOCX export.
         </p>
       </div>
 

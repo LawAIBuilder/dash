@@ -36,5 +36,6 @@ describe("resolvePageAssetContext", () => {
     expect(ctx?.remoteId).toBe("box-remote-99");
     expect(ctx?.mimeType).toBe("application/pdf");
     expect(ctx?.pageNumberInDoc).toBe(1);
+    expect(ctx?.authoritativeAssetUri === null || typeof ctx?.authoritativeAssetUri === "string").toBe(true);
   });
 });

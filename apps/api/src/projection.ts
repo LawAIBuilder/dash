@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
 import { writeCaseEvent } from "./events.js";
 
-const PROJECTION_VERSION = "slice03.v2";
+const PROJECTION_VERSION = "slice04.package_workbench";
 
 function extractFolderPath(rawJsonStr: string | null, rootFolderId: string | null): string | null {
   if (!rawJsonStr) return null;
@@ -414,6 +414,77 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
     created_at: string | null;
   }>;
 
+  const casePeople = db
+    .prepare(
+      `
+        SELECT id, name, role, organization, address, phone, email, pp_contact_id, notes, created_at
+        FROM case_people
+        WHERE case_id = ?
+        ORDER BY name ASC
+      `
+    )
+    .all(caseId) as Array<Record<string, unknown>>;
+
+  const syncEvents = db
+    .prepare(
+      `
+        SELECT id, sync_type, status, started_at, completed_at, error_message
+        FROM sync_runs
+        WHERE case_id = ?
+        ORDER BY COALESCE(completed_at, started_at) DESC
+        LIMIT 100
+      `
+    )
+    .all(caseId) as Array<Record<string, unknown>>;
+
+  const ppEntityEvents = db
+    .prepare(
+      `
+        SELECT id, entity_type, pp_entity_id, source_updated_at, synced_at,
+               substr(raw_json, 1, 4000) AS raw_json_excerpt
+        FROM pp_entities_raw
+        WHERE case_id = ?
+        ORDER BY COALESCE(source_updated_at, synced_at) DESC
+        LIMIT 200
+      `
+    )
+    .all(caseId) as Array<Record<string, unknown>>;
+
+  const timelineEntries: Array<{
+    id: string;
+    kind: string;
+    label: string;
+    detail: string | null;
+    occurred_at: string | null;
+    payload: Record<string, unknown>;
+  }> = [];
+
+  for (const row of syncEvents) {
+    timelineEntries.push({
+      id: String(row.id),
+      kind: "sync",
+      label: String(row.sync_type ?? "sync"),
+      detail: row.error_message ? String(row.error_message) : String(row.status ?? ""),
+      occurred_at: (row.completed_at as string | null) ?? (row.started_at as string | null) ?? null,
+      payload: row as Record<string, unknown>
+    });
+  }
+  for (const row of ppEntityEvents) {
+    timelineEntries.push({
+      id: String(row.id),
+      kind: "practicepanther_entity",
+      label: String(row.entity_type ?? "entity"),
+      detail: String(row.pp_entity_id ?? ""),
+      occurred_at: (row.source_updated_at as string | null) ?? (row.synced_at as string | null) ?? null,
+      payload: row as Record<string, unknown>
+    });
+  }
+  timelineEntries.sort((a, b) => {
+    const ta = a.occurred_at ?? "";
+    const tb = b.occurred_at ?? "";
+    return tb.localeCompare(ta);
+  });
+
   const extractionRows = pageExtractions.map((row) => {
     let payload: Record<string, unknown> = {};
     try {
@@ -542,6 +613,18 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
           return acc;
         }, {})
       }
+    },
+    case_people_slice: {
+      people: casePeople,
+      summary: {
+        total: casePeople.length
+      }
+    },
+    case_timeline_slice: {
+      entries: timelineEntries,
+      summary: {
+        total: timelineEntries.length
+      }
     }
   };
 
@@ -554,7 +637,9 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
     canonical_document_slice: stableHash(slices.canonical_document_slice),
     canonical_page_slice: stableHash(slices.canonical_page_slice),
     canonical_spine_slice: stableHash(slices.canonical_spine_slice),
-    extraction_slice: stableHash(slices.extraction_slice)
+    extraction_slice: stableHash(slices.extraction_slice),
+    case_people_slice: stableHash(slices.case_people_slice),
+    case_timeline_slice: stableHash(slices.case_timeline_slice)
   };
 
   const matterVersionToken = `matter_${stableHash({

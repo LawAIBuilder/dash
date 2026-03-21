@@ -73,6 +73,10 @@ function getPacketRow(db: Database.Database, packetId: string) {
           naming_scheme,
           status,
           metadata_json,
+          package_type,
+          package_label,
+          target_document_source_item_id,
+          run_status,
           created_at,
           updated_at
         FROM exhibit_packets
@@ -89,6 +93,10 @@ function getPacketRow(db: Database.Database, packetId: string) {
         naming_scheme: string;
         status: ExhibitPacketStatus;
         metadata_json: string | null;
+        package_type: string;
+        package_label: string | null;
+        target_document_source_item_id: string | null;
+        run_status: string | null;
         created_at: string;
         updated_at: string;
       }
@@ -598,12 +606,16 @@ export function createExhibitPacket(
     packetMode?: ExhibitPacketMode | null;
     namingScheme?: string | null;
     starterSlotCount?: number | null;
+    packageType?: string | null;
+    packageLabel?: string | null;
+    targetDocumentSourceItemId?: string | null;
   }
 ) {
   const packetId = randomUUID();
   const packetName = input.packetName?.trim() || "Hearing Packet";
   const packetMode = input.packetMode ?? "full";
   const namingScheme = input.namingScheme?.trim() || "letters";
+  const packageType = input.packageType?.trim() || "hearing_packet";
 
   const existingActive = db
     .prepare(
@@ -611,15 +623,16 @@ export function createExhibitPacket(
         SELECT id
         FROM exhibit_packets
         WHERE case_id = ?
+          AND package_type = ?
           AND status <> 'archived'
         LIMIT 1
       `
     )
-    .get(input.caseId) as { id: string } | undefined;
+    .get(input.caseId, packageType) as { id: string } | undefined;
   if (existingActive) {
     return {
       ok: false as const,
-      error: "an active exhibit packet already exists for this case"
+      error: `an active ${packageType} package already exists for this case`
     };
   }
 
@@ -627,11 +640,21 @@ export function createExhibitPacket(
     db.prepare(
       `
         INSERT INTO exhibit_packets
-          (id, case_id, packet_name, packet_mode, naming_scheme, status, metadata_json)
+          (id, case_id, packet_name, packet_mode, naming_scheme, status, metadata_json,
+           package_type, package_label, target_document_source_item_id)
         VALUES
-          (?, ?, ?, ?, ?, 'draft', '{}')
+          (?, ?, ?, ?, ?, 'draft', '{}', ?, ?, ?)
       `
-    ).run(packetId, input.caseId, packetName, packetMode, namingScheme);
+    ).run(
+      packetId,
+      input.caseId,
+      packetName,
+      packetMode,
+      namingScheme,
+      packageType,
+      input.packageLabel?.trim() ?? null,
+      input.targetDocumentSourceItemId?.trim() ?? null
+    );
 
     const sectionIds: string[] = [];
     DEFAULT_SECTIONS.forEach((section, index) => {
@@ -668,7 +691,13 @@ export function createExhibitPacket(
       actionType: "packet_created",
       targetType: "packet",
       targetId: packetId,
-      payload: { packet_name: packetName, packet_mode: packetMode, naming_scheme: namingScheme, starter_slots: starterCount }
+      payload: {
+        packet_name: packetName,
+        packet_mode: packetMode,
+        naming_scheme: namingScheme,
+        starter_slots: starterCount,
+        package_type: packageType
+      }
     });
   })();
 
@@ -686,6 +715,10 @@ export function updateExhibitPacket(
     packetMode?: ExhibitPacketMode | null;
     namingScheme?: string | null;
     status?: ExhibitPacketStatus | null;
+    packageType?: string | null;
+    packageLabel?: string | null;
+    targetDocumentSourceItemId?: string | null;
+    runStatus?: string | null;
   }
 ) {
   const packet = getPacketRow(db, input.packetId);
@@ -713,6 +746,22 @@ export function updateExhibitPacket(
   if (Object.hasOwn(input, "status")) {
     updates.push("status = ?");
     params.push(input.status ?? "draft");
+  }
+  if (Object.hasOwn(input, "packageType")) {
+    updates.push("package_type = ?");
+    params.push(input.packageType?.trim() || "hearing_packet");
+  }
+  if (Object.hasOwn(input, "packageLabel")) {
+    updates.push("package_label = ?");
+    params.push(input.packageLabel?.trim() ?? null);
+  }
+  if (Object.hasOwn(input, "targetDocumentSourceItemId")) {
+    updates.push("target_document_source_item_id = ?");
+    params.push(input.targetDocumentSourceItemId?.trim() ?? null);
+  }
+  if (Object.hasOwn(input, "runStatus")) {
+    updates.push("run_status = ?");
+    params.push(input.runStatus?.trim() ?? null);
   }
 
   if (updates.length > 0) {

@@ -69,8 +69,15 @@ export function useCreateExhibitPacket(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
   const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
-    mutationFn: (input?: { packet_name?: string; packet_mode?: "compact" | "full"; naming_scheme?: string }) =>
-      createExhibitPacket(normalizedCaseId, input),
+    mutationFn: (input?: {
+      packet_name?: string;
+      packet_mode?: "compact" | "full";
+      naming_scheme?: string;
+      package_type?: string;
+      package_label?: string;
+      target_document_source_item_id?: string;
+      starter_slot_count?: number;
+    }) => createExhibitPacket(normalizedCaseId, input),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
