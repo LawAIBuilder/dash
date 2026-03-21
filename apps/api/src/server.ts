@@ -106,7 +106,8 @@ import {
   getAIEventConfig,
   runPackageWorker,
   listPackageRunsForPacket,
-  getPackageRun
+  getPackageRun,
+  updatePackageRunDraft
 } from "./ai-service.js";
 import { markdownishToDocxBuffer } from "./docx-export.js";
 import { persistCaseUploadAndIngest } from "./matter-upload.js";
@@ -3126,6 +3127,25 @@ app.get("/api/package-runs/:runId", async (request, reply) => {
   return { ok: true, run: row };
 });
 
+app.patch("/api/package-runs/:runId", async (request, reply) => {
+  const { runId } = request.params as { runId: string };
+  const body = request.body as { markdown?: string } | undefined;
+  if (typeof body?.markdown !== "string") {
+    return reply.code(400).send({ ok: false, error: "markdown is required" });
+  }
+  const exists = db
+    .prepare(`SELECT pr.id FROM package_runs pr WHERE pr.id = ?`)
+    .get(runId) as { id: string } | undefined;
+  if (!exists) {
+    return reply.code(404).send({ ok: false, error: "run not found" });
+  }
+  const updated = updatePackageRunDraft(db, runId, body.markdown);
+  if (!updated) {
+    return reply.code(400).send({ ok: false, error: "run not editable or output is not valid JSON" });
+  }
+  return { ok: true, run: updated };
+});
+
 app.post("/api/package-runs/:runId/export-docx", async (request, reply) => {
   const { runId } = request.params as { runId: string };
   const run = getPackageRun(db, runId);
@@ -3134,8 +3154,8 @@ app.post("/api/package-runs/:runId/export-docx", async (request, reply) => {
   }
   let draft = "";
   try {
-    const parsed = JSON.parse(run.output_json) as { draft_markdown?: string };
-    draft = parsed.draft_markdown ?? run.output_json;
+    const parsed = JSON.parse(run.output_json) as { draft_markdown?: string; edited_draft_markdown?: string };
+    draft = parsed.edited_draft_markdown ?? parsed.draft_markdown ?? run.output_json;
   } catch {
     draft = run.output_json;
   }

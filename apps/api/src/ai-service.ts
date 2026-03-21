@@ -246,14 +246,67 @@ export function getPackageRun(db: Database.Database, runId: string): PackageRunR
   return (db.prepare(`SELECT * FROM package_runs WHERE id = ?`).get(runId) as PackageRunRow | undefined) ?? null;
 }
 
+/** Split uploaded interrogatory / RFP text into individual numbered requests (heuristic). Exported for tests. */
+export function parseInterrogatoryRequests(text: string): string[] {
+  const t = text.replace(/\r\n/g, "\n").trim();
+  if (!t) return [];
+
+  const blockSplit = t.split(
+    /\n(?=\s*(?:INTERROGATORY\s+NO\.?\s*\d+|INTERROGATORY\s*#\s*\d+|RQ\s*#?\s*\d+|REQUEST\s+NO\.?\s*\d+|\d+\.\s*(?:State|Define|Identify|Describe|List|Produce|Admit|INTERROGATORY|QUESTION)))/gi
+  );
+  const chunks = blockSplit.map((s) => s.trim()).filter(Boolean);
+  if (chunks.length > 1) return chunks;
+
+  const alt = t.split(/\n(?=\s*\d+\.\s+)/);
+  const altChunks = alt.map((s) => s.trim()).filter((s) => s.length > 12);
+  if (altChunks.length > 1) return altChunks;
+
+  return [t];
+}
+
 function packetWorkerSystemPrompt(packageType: string): string {
   if (packageType === "claim_petition") {
-    return `You are a California workers' compensation attorney assistant. Draft claim petition package content grounded ONLY in the provided retrieval bundle. Output valid JSON with keys: draft_markdown (string), citations (array of {claim, source_item_id, canonical_page_id, page_text_excerpt}), qa_checklist (array of {check_id, label, status: pass|fail|warn, detail}), assembly_recommendations (array of {title, source_item_ids, rationale}). Cite sources for every factual claim.`;
+    return `You are a Minnesota workers' compensation paralegal/attorney assistant. The Workers' Compensation Court of Appeals (WCCA) and Office of Administrative Hearings (OAH) filing context applies. Draft ONLY from the retrieval bundle JSON (case_summary, document_summaries, full_documents, pp_context, package_rules). Do not invent facts, dates, providers, or docket numbers.
+
+Output a single JSON object with keys:
+- draft_markdown (string): combined draft in markdown with sections --- Cover letter ---, --- Claim petition ---, and optional --- Intervention notice ---, --- Affidavit of service --- when rules/package_rules indicate.
+- citations (array of { claim: string, source_item_id: string|null, canonical_page_id: string|null, page_text_excerpt: string }): one entry per material factual assertion tied to a source.
+- qa_checklist (array of { check_id: string, label: string, status: "pass"|"fail"|"warn", detail: string }): include medical_causation_document_present (warn if no treating/narrative support found), required_filing_elements (pass/fail), intervention_if_applicable, affidavit_if_required.
+- assembly_recommendations (array of { title: string, source_item_ids: string[], rationale: string }): suggested exhibits to attach.
+- missing_proof (array of { item: string, severity: "blocker"|"warn" }): e.g. missing medical causation narrative, missing NOID, etc.
+
+Use Minnesota WC practice framing (not California). Cite every factual claim.`;
   }
   if (packageType === "discovery_response") {
-    return `You are a California workers' compensation attorney assistant. Draft discovery response content using the uploaded interrogatories (full text in bundle) and case documents. Output valid JSON with keys: draft_markdown, citations, qa_checklist, assembly_recommendations (same shapes as claim_petition). Flag insufficient evidence with qa_checklist warn items.`;
+    return `You are a Minnesota workers' compensation attorney assistant. The uploaded interrogatories or requests for production appear as full text in the retrieval bundle (full_documents). Use ONLY the bundle for facts; flag gaps honestly.
+
+Output a single JSON object with keys:
+- draft_markdown (string): markdown with a clear subsection per numbered interrogatory/request (use the same numbering as the discovery set). For each, give a concise proposed response and standard objections where appropriate (relevance, privilege, overbreadth, vagueness) when supported by the rules and facts.
+- interrogatory_parse (array of { index: number, label: string, summary: string }): mirror the machine-parsed list you receive in the user message; refine labels if needed.
+- citations (same shape as claim_petition).
+- qa_checklist (array of { check_id, label, status: "pass"|"fail"|"warn", detail }): include per-request weak_support flags.
+- assembly_recommendations (same shape as claim_petition).
+- objection_flags (array of { request_index: number, objection: string, basis: string }).
+
+Mark weakly supported answers with qa_checklist status "warn".`;
   }
-  return `You are a workers' compensation legal assistant helping prepare exhibit packets. Output valid JSON with keys: exhibits (array of {exhibit_label, title, source_item_ids, rationale}), citations (array), qa_checklist (array of {check_id, label, status, detail}), draft_markdown (optional summary).`;
+  return `You are a Minnesota workers' compensation legal assistant helping prepare exhibit/hearing packets. Output valid JSON with keys: exhibits (array of { exhibit_label, title, source_item_ids, rationale }), citations (array of { claim, source_item_id, canonical_page_id, page_text_excerpt }), qa_checklist (array of { check_id, label, status: pass|fail|warn, detail }), draft_markdown (optional hearing summary or exhibit overview). Ground answers in the retrieval bundle only.`;
+}
+
+export function updatePackageRunDraft(db: Database.Database, runId: string, editedMarkdown: string): PackageRunRow | null {
+  const run = getPackageRun(db, runId);
+  if (!run || run.status !== "completed" || !run.output_json) {
+    return null;
+  }
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(run.output_json) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  obj.edited_draft_markdown = editedMarkdown;
+  db.prepare(`UPDATE package_runs SET output_json = ? WHERE id = ?`).run(JSON.stringify(obj), runId);
+  return getPackageRun(db, runId);
 }
 
 export async function runPackageWorker(
@@ -326,9 +379,15 @@ export async function runPackageWorker(
   }
 
   const systemPrompt = packetWorkerSystemPrompt(packet.package_type);
+  let discoveryAux = "";
+  if (packet.package_type === "discovery_response") {
+    const joined = bundle.full_documents.map((d) => d.full_text).join("\n\n");
+    const parsed = parseInterrogatoryRequests(joined);
+    discoveryAux = `\n\nParsed interrogatory/request segments (${parsed.length} segments, heuristic): ${JSON.stringify(parsed.slice(0, 200))}`;
+  }
   const userPrompt = `Package: ${packet.packet_name} (${packet.package_type})
 ${packet.package_label ? `Label: ${packet.package_label}\n` : ""}
-Retrieval bundle (JSON):\n${bundleJson.slice(0, Math.min(bundleJson.length, DEFAULT_MAX_RETRIEVAL_CHARS))}`;
+Retrieval bundle (JSON):\n${bundleJson.slice(0, Math.min(bundleJson.length, DEFAULT_MAX_RETRIEVAL_CHARS))}${discoveryAux}`;
 
   db.prepare(
     `INSERT INTO package_runs (id, packet_id, status, input_json, model, started_at, retrieval_warnings_json)

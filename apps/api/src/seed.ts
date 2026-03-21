@@ -978,3 +978,97 @@ export function seedFoundation(db: Database.Database) {
     }
   })();
 }
+
+const DEFAULT_PACKAGE_RULE_SEEDS: Array<{
+  package_type: string;
+  rule_key: string;
+  rule_label: string;
+  instructions: string;
+  sort_order: number;
+}> = [
+  {
+    package_type: "claim_petition",
+    rule_key: "cover_letter",
+    rule_label: "Cover letter to WCCA / OAH",
+    instructions:
+      "Draft a professional cover letter identifying the employee, employer, insurer, docket or claim numbers from the bundle, and listing enclosed materials. Use MN workers' compensation filing conventions.",
+    sort_order: 10
+  },
+  {
+    package_type: "claim_petition",
+    rule_key: "claim_petition",
+    rule_label: "Claim petition body",
+    instructions:
+      "Frame the petition using Minn. Stat. ch. 176 and applicable rules. Include injury description, causal relationship, benefits sought, and jurisdictional facts drawn only from the retrieval bundle.",
+    sort_order: 20
+  },
+  {
+    package_type: "claim_petition",
+    rule_key: "intervention_notice",
+    rule_label: "Intervention notice",
+    instructions:
+      "When third-party reimbursement or intervention is active in PP notes or documents, include a concise intervention / joinder notice section with parties and basis.",
+    sort_order: 30
+  },
+  {
+    package_type: "claim_petition",
+    rule_key: "medical_causation",
+    rule_label: "Medical causation support",
+    instructions:
+      "Identify treating records, narrative reports, or causation opinions in the corpus. Flag missing medical causation documentation before export.",
+    sort_order: 40
+  },
+  {
+    package_type: "claim_petition",
+    rule_key: "affidavit_of_service",
+    rule_label: "Affidavit of service",
+    instructions:
+      "When required for filing, draft affidavit language with service method and dates consistent with case documents.",
+    sort_order: 50
+  },
+  {
+    package_type: "discovery_response",
+    rule_key: "objections_core",
+    rule_label: "Standard WC discovery objections",
+    instructions:
+      "Apply objections for relevance, privilege, overbreadth, and undue burden where appropriate. Reserve on form interrogatories where required.",
+    sort_order: 10
+  },
+  {
+    package_type: "discovery_response",
+    rule_key: "request_by_request",
+    rule_label: "Request-by-request responses",
+    instructions:
+      "Answer each interrogatory or production request separately with citations to documents in the bundle. Note insufficient evidence explicitly.",
+    sort_order: 20
+  },
+  {
+    package_type: "discovery_response",
+    rule_key: "responsive_docs",
+    rule_label: "Responsive document grouping",
+    instructions:
+      "Group exhibits logically (medical, employment, benefits) and map them to the requests they support.",
+    sort_order: 30
+  },
+  {
+    package_type: "hearing_packet",
+    rule_key: "readiness_qa",
+    rule_label: "Hearing readiness",
+    instructions:
+      "Confirm exhibit list completeness, page exclusions, OCR review, and finalization before hearing packet export.",
+    sort_order: 10
+  }
+];
+
+/** Idempotent per case: inserts default package_rules rows for all alpha package types. */
+export function seedDefaultPackageRulesForCase(db: Database.Database, caseId: string) {
+  const ts = nowIso();
+  const stmt = db.prepare(`
+    INSERT INTO package_rules (id, case_id, package_type, rule_key, rule_label, instructions, sort_order, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(case_id, package_type, rule_key) DO NOTHING
+  `);
+  for (const r of DEFAULT_PACKAGE_RULE_SEEDS) {
+    stmt.run(randomUUID(), caseId, r.package_type, r.rule_key, r.rule_label, r.instructions, r.sort_order, ts, ts);
+  }
+}

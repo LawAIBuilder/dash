@@ -790,3 +790,13 @@ export async function exportPackageRunDocx(runId: string) {
   return readJson<{ ok: true; path: string; filename: string; bytes: number }>(response);
 }
 
+export async function updatePackageRunDraft(runId: string, markdown: string) {
+  const response = await fetch(apiUrl(`/api/package-runs/${encodeURIComponent(runId)}`), {
+    method: "PATCH",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ markdown })
+  });
+  const payload = await readJson<{ ok: true; run: PackageRun }>(response);
+  return payload.run;
+}
+

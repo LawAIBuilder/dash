@@ -5,6 +5,7 @@ import {
   listPackageRules,
   listPackageRuns,
   runPackageWorker as triggerPackageRun,
+  updatePackageRunDraft,
   uploadCaseFile
 } from "@/lib/api-client";
 
@@ -64,6 +65,16 @@ export function useTriggerPackageRun(caseId: string) {
     onSuccess: (_, v) => {
       void qc.invalidateQueries({ queryKey: ["package-runs", v.packetId] });
       void qc.invalidateQueries({ queryKey: ["exhibits", caseId] });
+    }
+  });
+}
+
+export function useUpdatePackageRunDraft(packetId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { runId: string; markdown: string }) => updatePackageRunDraft(input.runId, input.markdown),
+    onSuccess: () => {
+      if (packetId) void qc.invalidateQueries({ queryKey: ["package-runs", packetId] });
     }
   });
 }

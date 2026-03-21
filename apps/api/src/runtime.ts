@@ -15,6 +15,7 @@ import {
   startSyncRun,
   upsertSyncCursor
 } from "./sync-lifecycle.js";
+import { seedDefaultPackageRulesForCase } from "./seed.js";
 
 const HEARING_PREP_KEY = "hearing_prep";
 const MEDICAL_REQUEST_KEY = "medical_request";
@@ -1753,6 +1754,7 @@ export function ensureCaseScaffold(db: Database.Database, input: EnsureCaseScaff
       input.insurerName ?? null,
       input.hearingDate ?? null
     );
+    seedDefaultPackageRulesForCase(db, caseId);
   }
 
   const issueId = ensureMedicalRequestIssue(db, caseId);

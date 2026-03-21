@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -19,8 +19,9 @@ import { StatePanel } from "@/components/case/StatePanel";
 
 export function CaseDocumentsPage() {
   const { caseId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { projection, error, isLoading } = useProjection(caseId);
-  const { rows, categories, ocrStatuses, search, setSearch, categoryFilter, setCategoryFilter, ocrFilter, setOcrFilter, setSort } =
+  const { rows, rawRows, categories, ocrStatuses, search, setSearch, categoryFilter, setCategoryFilter, ocrFilter, setOcrFilter, setSort } =
     useDocumentTable(projection);
   const { queueOcrMutation } = useCaseActions(caseId);
   const [preview, setPreview] = useState<{ title: string; file: Blob | null; open: boolean }>({
@@ -31,6 +32,18 @@ export function CaseDocumentsPage() {
   const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null);
 
   const needsAttentionCount = useMemo(() => rows.filter((row) => row.reviewRequired).length, [rows]);
+
+  useEffect(() => {
+    const focus = searchParams.get("sourceItem")?.trim();
+    if (!focus || rawRows.length === 0) return;
+    const match = rawRows.find((row) => row.sourceItemId === focus || row.id === focus);
+    if (match) {
+      setSearch(match.title);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("sourceItem");
+    setSearchParams(next, { replace: true });
+  }, [rawRows, searchParams, setSearch, setSearchParams]);
 
   async function openPreview(sourceItemId: string, title: string) {
     try {

@@ -661,6 +661,7 @@ export function CaseExhibitsPage() {
                 <li>Page exclusions are reviewed for privileged or irrelevant pages.</li>
                 <li>OCR/review queue is clear for documents you are submitting.</li>
                 <li>Packet order matches your hearing outline (sections → slots).</li>
+                <li>After finalize, generate the combined packet PDF and spot-check pagination and exhibit labels before filing.</li>
               </ul>
             </CardContent>
           </Card>
