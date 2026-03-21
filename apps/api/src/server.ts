@@ -1,6 +1,7 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { openDatabase } from "./db.js";
 import {
@@ -89,6 +90,7 @@ import {
   readPracticePantherConfig
 } from "./pp-provider.js";
 import { seedFoundation } from "./seed.js";
+import { readSyncCursorValue } from "./sync-lifecycle.js";
 import { readWorkerHealth } from "./worker-health.js";
 import {
   deleteAIEventConfig,
@@ -360,9 +362,32 @@ function completePracticePantherConnection(
   ).run(input.accountLabel ?? null, input.externalAccountId ?? null, JSON.stringify(input.metadata), connectionId);
 }
 
+const ALLOWED_REDIRECT_ORIGINS = new Set([
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  ...(process.env.WC_CORS_ORIGIN?.split(",").map((o) => o.trim()).filter(Boolean) ?? [])
+]);
+
+function isAllowedRedirectOrigin(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return ALLOWED_REDIRECT_ORIGINS.has(parsed.origin);
+  } catch {
+    return false;
+  }
+}
+
 function buildPracticePantherCallbackRedirect(returnTo: string | null | undefined, success: boolean, message?: string) {
-  const fallback = returnTo && /^https?:\/\//i.test(returnTo) ? returnTo : returnTo && returnTo.startsWith("/") ? returnTo : "/cases";
-  const url = new URL(fallback, fallback.startsWith("http") ? undefined : "http://localhost");
+  let target: string;
+  if (returnTo && /^https?:\/\//i.test(returnTo) && isAllowedRedirectOrigin(returnTo)) {
+    target = returnTo;
+  } else if (returnTo && returnTo.startsWith("/")) {
+    target = returnTo;
+  } else {
+    target = "/cases";
+  }
+
+  const url = new URL(target, target.startsWith("http") ? undefined : "http://localhost");
   if (success) {
     url.searchParams.set("pp_auth", "success");
   } else {
@@ -371,7 +396,7 @@ function buildPracticePantherCallbackRedirect(returnTo: string | null | undefine
       url.searchParams.set("pp_error", message);
     }
   }
-  return fallback.startsWith("http") ? url.toString() : `${url.pathname}${url.search}`;
+  return target.startsWith("http") ? url.toString() : `${url.pathname}${url.search}`;
 }
 
 async function getValidPracticePantherAccessToken(connection: {
@@ -1504,12 +1529,26 @@ app.get("/api/connectors/box/folders/:folderId/items", async (request, reply) =>
  */
 app.get("/api/connectors/practicepanther/status", async () => {
   const connection = readSourceConnectionByProvider("practicepanther");
+  const sanitized = connection
+    ? {
+        id: connection.id,
+        provider: connection.provider,
+        account_label: connection.account_label,
+        auth_mode: connection.auth_mode,
+        status: connection.status,
+        external_account_id: connection.external_account_id,
+        last_error_message: connection.last_error_message,
+        last_verified_at: connection.last_verified_at,
+        updated_at: connection.updated_at,
+        created_at: connection.created_at
+      }
+    : null;
   return {
     ok: true,
     configured: isPracticePantherOAuthReady(),
     api_base_url: readPracticePantherConfig().apiBaseUrl,
     redirect_uri: readPracticePantherConfig().redirectUri,
-    connection
+    connection: sanitized
   };
 });
 
@@ -1639,8 +1678,33 @@ app.post("/api/connectors/practicepanther/sync", async (request, reply) => {
 
     const matter = await fetchPracticePantherMatterById(config, accessToken, targetMatterId);
     const matterPatch = buildPracticePantherMatterPatch(matter as Record<string, unknown>);
+
+    const patchUpdates: string[] = [];
+    const patchParams: unknown[] = [];
     if (matterPatch.ppMatterId) {
-      db.prepare(`UPDATE cases SET pp_matter_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(matterPatch.ppMatterId, caseRow.id);
+      patchUpdates.push("pp_matter_id = ?");
+      patchParams.push(matterPatch.ppMatterId);
+    }
+    if (matterPatch.hearingDate) {
+      patchUpdates.push("hearing_date = ?");
+      patchParams.push(matterPatch.hearingDate);
+    }
+    if (matterPatch.employeeName) {
+      patchUpdates.push("employee_name = COALESCE(NULLIF(employee_name, ''), ?)");
+      patchParams.push(matterPatch.employeeName);
+    }
+    if (matterPatch.employerName) {
+      patchUpdates.push("employer_name = COALESCE(NULLIF(employer_name, ''), ?)");
+      patchParams.push(matterPatch.employerName);
+    }
+    if (matterPatch.insurerName) {
+      patchUpdates.push("insurer_name = COALESCE(NULLIF(insurer_name, ''), ?)");
+      patchParams.push(matterPatch.insurerName);
+    }
+    if (patchUpdates.length > 0) {
+      patchUpdates.push("updated_at = CURRENT_TIMESTAMP");
+      patchParams.push(caseRow.id);
+      db.prepare(`UPDATE cases SET ${patchUpdates.join(", ")} WHERE id = ?`).run(...patchParams);
     }
 
     const matterRecord = matter as Record<string, unknown>;
@@ -1648,16 +1712,24 @@ app.post("/api/connectors/practicepanther/sync", async (request, reply) => {
       matterRecord.account_ref && typeof matterRecord.account_ref === "object" && matterRecord.account_ref !== null
         ? ((matterRecord.account_ref as { id?: unknown }).id as string | undefined)
         : undefined;
+
+    const ppSpec = getSourceConnectorSpec("practicepanther");
+    const previousCursor = readSyncCursorValue(db, {
+      sourceConnectionId: connection.id,
+      caseId: caseRow.id,
+      cursorKey: ppSpec.cursorKey
+    });
     const cursorAfter = buildPracticePantherSyncCursorValue();
+
     const account = accountId ? await fetchPracticePantherAccountById(config, accessToken, accountId) : null;
     const [contacts, notes, tasks, events, emails, callLogs, relationships] = await Promise.all([
       accountId ? fetchPracticePantherContacts(config, accessToken, accountId) : Promise.resolve([]),
-      fetchPracticePantherNotes(config, accessToken, targetMatterId),
-      fetchPracticePantherTasks(config, accessToken, targetMatterId),
-      fetchPracticePantherEvents(config, accessToken, targetMatterId),
-      fetchPracticePantherEmails(config, accessToken, targetMatterId),
-      fetchPracticePantherCallLogs(config, accessToken, targetMatterId),
-      fetchPracticePantherRelationships(config, accessToken, targetMatterId)
+      fetchPracticePantherNotes(config, accessToken, targetMatterId, previousCursor),
+      fetchPracticePantherTasks(config, accessToken, targetMatterId, previousCursor),
+      fetchPracticePantherEvents(config, accessToken, targetMatterId, previousCursor),
+      fetchPracticePantherEmails(config, accessToken, targetMatterId, previousCursor),
+      fetchPracticePantherCallLogs(config, accessToken, targetMatterId, previousCursor),
+      fetchPracticePantherRelationships(config, accessToken, targetMatterId, previousCursor)
     ]);
 
     const entities = [
@@ -1753,12 +1825,56 @@ app.post("/api/connectors/practicepanther/sync", async (request, reply) => {
       entities
     });
 
+    let contactsPromoted = 0;
+    for (const contact of contacts) {
+      const c = contact as Record<string, unknown>;
+      const ppContactId = typeof c.id === "string" ? c.id : null;
+      const displayName = typeof c.display_name === "string" ? c.display_name : null;
+      const email = typeof c.email === "string" ? c.email : null;
+      const phone = typeof c.phone === "string" ? c.phone : null;
+      const company = typeof c.company_name === "string" ? c.company_name : null;
+      if (!ppContactId || !displayName) continue;
+
+      const existing = db
+        .prepare(`SELECT id FROM case_people WHERE case_id = ? AND pp_contact_id = ? LIMIT 1`)
+        .get(caseRow.id, ppContactId) as { id: string } | undefined;
+      if (existing) {
+        db.prepare(
+          `UPDATE case_people SET name = ?, email = COALESCE(?, email), phone = COALESCE(?, phone),
+           organization = COALESCE(?, organization) WHERE id = ?`
+        ).run(displayName, email, phone, company, existing.id);
+      } else {
+        db.prepare(
+          `INSERT INTO case_people (id, case_id, name, role, organization, email, phone, pp_contact_id)
+           VALUES (?, ?, ?, 'contact', ?, ?, ?, ?)`
+        ).run(randomUUID(), caseRow.id, displayName, company, email, phone, ppContactId);
+      }
+      contactsPromoted++;
+    }
+
+    for (const rel of relationships) {
+      const r = rel as Record<string, unknown>;
+      const relName = typeof r.name === "string" ? r.name : typeof r.display_name === "string" ? r.display_name : null;
+      const relRole = typeof r.relationship_type === "string" ? r.relationship_type.toLowerCase() : "relationship";
+      if (!relName) continue;
+
+      const existingRel = db
+        .prepare(`SELECT id FROM case_people WHERE case_id = ? AND name = ? AND role = ? LIMIT 1`)
+        .get(caseRow.id, relName, relRole) as { id: string } | undefined;
+      if (!existingRel) {
+        db.prepare(
+          `INSERT INTO case_people (id, case_id, name, role) VALUES (?, ?, ?, ?)`
+        ).run(randomUUID(), caseRow.id, relName, relRole);
+      }
+    }
+
     return {
       ok: true,
       connection_id: connection.id,
       case_id: caseRow.id,
       pp_matter_id: targetMatterId,
       sync,
+      contacts_promoted: contactsPromoted,
       counts: {
         matter: 1,
         account: account ? 1 : 0,

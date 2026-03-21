@@ -426,9 +426,44 @@ export function buildPracticePantherMatterPatch(rawMatter: Record<string, unknow
         ? rawMatter.name
         : null;
   const ppMatterId = typeof rawMatter.id === "string" ? rawMatter.id : null;
+
+  const customFields = extractPracticePantherCustomFields("matter", rawMatter);
+  const customFieldsByLabel = new Map(customFields.map((f) => [f.label.toLowerCase(), f]));
+
+  const hearingDateField =
+    customFieldsByLabel.get("hearing date") ??
+    customFieldsByLabel.get("trial date") ??
+    customFieldsByLabel.get("conference date");
+  const hearingDate = hearingDateField?.normalized_date ?? null;
+
+  const employerField =
+    customFieldsByLabel.get("employer") ??
+    customFieldsByLabel.get("employer name") ??
+    customFieldsByLabel.get("employer1");
+  const employerName = employerField?.normalized_text ?? null;
+
+  const insurerField =
+    customFieldsByLabel.get("insurer") ??
+    customFieldsByLabel.get("insurer name") ??
+    customFieldsByLabel.get("insurance carrier") ??
+    customFieldsByLabel.get("carrier");
+  const insurerName = insurerField?.normalized_text ?? null;
+
+  const accountRef = rawMatter.account_ref;
+  const employeeName =
+    accountRef && typeof accountRef === "object" && accountRef !== null
+      ? (typeof (accountRef as Record<string, unknown>).display_name === "string"
+          ? (accountRef as Record<string, unknown>).display_name as string
+          : null)
+      : null;
+
   return {
     name: displayName ?? undefined,
-    ppMatterId: ppMatterId ?? undefined
+    ppMatterId: ppMatterId ?? undefined,
+    hearingDate: hearingDate ?? undefined,
+    employeeName: employeeName ?? undefined,
+    employerName: employerName ?? undefined,
+    insurerName: insurerName ?? undefined
   };
 }
 

@@ -202,7 +202,7 @@ describe("practicepanther production routes", () => {
     }>();
     expect(statusPayload.connection?.status).toBe("active");
     expect(statusPayload.connection?.external_account_id).toBe("user-pp-1");
-    expect(statusPayload.connection?.metadata_json ?? "").toContain("pp-refresh-initial");
+    expect(statusPayload.connection?.metadata_json).toBeUndefined();
 
     const matters = await app.inject({
       method: "GET",
