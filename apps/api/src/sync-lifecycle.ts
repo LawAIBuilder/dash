@@ -102,6 +102,7 @@ export interface CompleteSyncRunInput {
   cursorAfter?: string | null;
   status?: "success" | "failed";
   errorMessage?: string | null;
+  warningMessage?: string | null;
 }
 
 export function completeSyncRun(
@@ -114,15 +115,71 @@ export function completeSyncRun(
       SET status = ?,
           completed_at = CURRENT_TIMESTAMP,
           cursor_after = ?,
-          error_message = ?
+          error_message = ?,
+          warning_message = ?
       WHERE id = ?
     `
   ).run(
     input.status ?? "success",
     input.cursorAfter ?? null,
     input.errorMessage ?? null,
+    input.warningMessage ?? null,
     input.syncRunId
   );
+}
+
+export function reconcileStaleSyncRuns(
+  db: Database.Database,
+  input?: {
+    staleAfterMinutes?: number;
+    errorMessage?: string;
+  }
+) {
+  const staleAfterMinutes = Math.max(1, Math.floor(input?.staleAfterMinutes ?? 30));
+  const errorMessage = input?.errorMessage?.trim() || "Stale sync run reconciled after incomplete shutdown";
+  const threshold = `-${staleAfterMinutes} minutes`;
+
+  const staleConnectionRows = db
+    .prepare(
+      `
+        SELECT DISTINCT source_connection_id
+        FROM sync_runs
+        WHERE status = 'running'
+          AND completed_at IS NULL
+          AND started_at <= datetime('now', ?)
+      `
+    )
+    .all(threshold) as Array<{ source_connection_id: string }>;
+
+  const run = db
+    .prepare(
+      `
+        UPDATE sync_runs
+        SET status = 'failed',
+            completed_at = CURRENT_TIMESTAMP,
+            error_message = COALESCE(NULLIF(error_message, ''), ?),
+            warning_message = NULL
+        WHERE status = 'running'
+          AND completed_at IS NULL
+          AND started_at <= datetime('now', ?)
+      `
+    )
+    .run(errorMessage, threshold);
+
+  for (const row of staleConnectionRows) {
+    db.prepare(
+      `
+        UPDATE source_connections
+        SET status = 'error',
+            last_error_message = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+          AND status = 'syncing'
+      `
+    ).run(errorMessage, row.source_connection_id);
+  }
+
+  return run.changes;
 }
 
 export interface SetSourceConnectionStatusInput {
@@ -207,38 +264,23 @@ export interface RunTrackedSourceSyncInput<TResult> {
   buildFailureManifest: (errorMessage: string) => Record<string, unknown>;
 }
 
+export interface RunTrackedSourceSyncResult<TResult> {
+  result: TResult;
+  snapshotId: string | null;
+  warnings: string[];
+}
+
 export function runTrackedSourceSync<TResult>(
   input: RunTrackedSourceSyncInput<TResult>
-) {
+): RunTrackedSourceSyncResult<TResult> {
   setSourceConnectionStatus(input.db, {
     sourceConnectionId: input.sourceConnectionId,
     status: "syncing"
   });
 
+  let result: TResult;
   try {
-    const result = input.run();
-    const snapshotId = recordSourceSnapshot(input.db, {
-      caseId: input.caseId,
-      sourceConnectionId: input.sourceConnectionId,
-      snapshotType: input.snapshotType,
-      sourceType: input.sourceType,
-      manifest: input.buildSuccessManifest(result)
-    });
-
-    completeSyncRun(input.db, {
-      syncRunId: input.syncRunId,
-      cursorAfter: input.cursorAfter ?? null
-    });
-    setSourceConnectionStatus(input.db, {
-      sourceConnectionId: input.sourceConnectionId,
-      status: "active",
-      lastErrorMessage: null
-    });
-
-    return {
-      result,
-      snapshotId
-    };
+    result = input.run();
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Unknown sync failure";
 
@@ -257,7 +299,8 @@ export function runTrackedSourceSync<TResult>(
     completeSyncRun(input.db, {
       syncRunId: input.syncRunId,
       status: "failed",
-      errorMessage
+      errorMessage,
+      warningMessage: null
     });
     setSourceConnectionStatus(input.db, {
       sourceConnectionId: input.sourceConnectionId,
@@ -267,4 +310,39 @@ export function runTrackedSourceSync<TResult>(
 
     throw error;
   }
+
+  const warnings: string[] = [];
+  let snapshotId: string | null = null;
+
+  try {
+    snapshotId = recordSourceSnapshot(input.db, {
+      caseId: input.caseId,
+      sourceConnectionId: input.sourceConnectionId,
+      snapshotType: input.snapshotType,
+      sourceType: input.sourceType,
+      manifest: input.buildSuccessManifest(result)
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown snapshot persistence failure";
+    warnings.push(`snapshot_record_failed: ${errorMessage}`);
+  }
+
+  completeSyncRun(input.db, {
+    syncRunId: input.syncRunId,
+    cursorAfter: input.cursorAfter ?? null,
+    status: "success",
+    errorMessage: null,
+    warningMessage: warnings.length > 0 ? warnings.join(" | ") : null
+  });
+  setSourceConnectionStatus(input.db, {
+    sourceConnectionId: input.sourceConnectionId,
+    status: "active",
+    lastErrorMessage: null
+  });
+
+  return {
+    result,
+    snapshotId,
+    warnings
+  };
 }

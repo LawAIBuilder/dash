@@ -1,5 +1,6 @@
 import multipart from "@fastify/multipart";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
 import Fastify from "fastify";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -16,6 +17,8 @@ import {
   deleteExhibitSection,
   finalizeExhibitPacket,
   getCaseExhibitWorkspace,
+  getExhibitCaseId,
+  getExhibitItemCaseId,
   getPacketCaseId,
   getPacketHistory,
   getPacketPreview,
@@ -34,6 +37,7 @@ import {
   getPacketExportRow,
   listPacketExportsForPacket,
   parsePacketPdfExportOptions,
+  reconcileStalePacketExports,
   resolveExportAbsolutePath,
   runPacketPdfExport
 } from "./packet-pdf.js";
@@ -90,11 +94,18 @@ import {
   mergePracticePantherConnectionMetadata,
   parsePracticePantherConnectionMetadata,
   refreshPracticePantherAccessToken,
-  readPracticePantherConfig
+  readPracticePantherConfig,
+  serializePracticePantherConnectionMetadata
 } from "./pp-provider.js";
 import { seedFoundation } from "./seed.js";
-import { readSyncCursorValue } from "./sync-lifecycle.js";
+import { readSyncCursorValue, reconcileStaleSyncRuns } from "./sync-lifecycle.js";
 import { readWorkerHealth } from "./worker-health.js";
+import { buildHearingPrepSnapshot } from "./hearing-runner.js";
+import {
+  buildHistoricalCaseFlow,
+  recommendNextHistoricalEvents,
+  summarizeHistoricalCaseFlows
+} from "./historical-indexer.js";
 import {
   deleteAIEventConfig,
   isAIConfigured,
@@ -107,15 +118,18 @@ import {
   runPackageWorker,
   listPackageRunsForPacket,
   getPackageRun,
-  updatePackageRunDraft
+  updatePackageRunDraft,
+  approvePackageRun
 } from "./ai-service.js";
 import { markdownishToDocxBuffer } from "./docx-export.js";
 import { persistCaseUploadAndIngest } from "./matter-upload.js";
 import {
   buildPackageBundle,
   gatherDocumentSummaries,
-  getFullCanonicalTextForSourceItem,
-  getPageChunks
+  listSourceItemsMissingFromCase,
+  getFullCanonicalTextForSourceItemInCase,
+  getPageChunks,
+  getPageChunksInCase
 } from "./retrieval.js";
 import {
   MAX_TEMPLATE_BODY_MARKDOWN,
@@ -135,50 +149,109 @@ import {
   updateUserDocumentTemplate,
   validateValuesPayload
 } from "./document-templates.js";
+import {
+  clampPositiveIntegerInput,
+  readBooleanEnv,
+  readDevRoutesEnabled,
+  readPortEnv,
+  readPositiveIntegerEnv
+} from "./env.js";
+import { buildApiErrorResponse } from "./error-response.js";
+import { createFixedWindowRateLimiter } from "./rate-limit.js";
 
 const db = openDatabase();
 seedFoundation(db);
+const startupRecovery = {
+  stale_sync_runs_reconciled: reconcileStaleSyncRuns(db),
+  stale_packet_exports_reconciled: reconcileStalePacketExports(db)
+};
 
-async function fetchBoxPdfBytesForSourceItem(sourceItemId: string): Promise<Buffer> {
-  const config = resolveBoxProviderConfig();
-  if (!config) {
-    throw new Error("BOX_JWT_CONFIG_JSON or BOX_JWT_CONFIG_FILE must be configured");
+function isPdfLikeAsset(title: string | null, mimeType: string | null, authoritativeAssetUri: string | null) {
+  const normalizedMime = mimeType?.trim().toLowerCase() ?? "";
+  if (normalizedMime === "application/pdf") {
+    return true;
   }
-  const sourceItem = db
+  if (/\.pdf$/i.test(title ?? "")) {
+    return true;
+  }
+  return authoritativeAssetUri?.toLowerCase().includes(".pdf") ?? false;
+}
+
+function readSourceItemBinaryContext(sourceItemId: string) {
+  return db
     .prepare(
       `
-        SELECT provider, remote_id, title, mime_type
-        FROM source_items
-        WHERE id = ?
+        SELECT
+          si.id,
+          si.case_id,
+          si.provider,
+          si.remote_id,
+          si.source_kind,
+          si.title,
+          si.mime_type,
+          (
+            SELECT sv.authoritative_asset_uri
+            FROM source_versions sv
+            WHERE sv.source_item_id = si.id
+              AND (si.latest_version_token IS NULL OR sv.version_token = si.latest_version_token)
+            ORDER BY sv.created_at DESC
+            LIMIT 1
+          ) AS authoritative_asset_uri
+        FROM source_items si
+        WHERE si.id = ?
         LIMIT 1
       `
     )
     .get(sourceItemId) as
     | {
+        id: string;
+        case_id: string;
         provider: string;
         remote_id: string;
+        source_kind: string;
         title: string | null;
         mime_type: string | null;
+        authoritative_asset_uri: string | null;
       }
     | undefined;
+}
+
+async function fetchPdfBytesForSourceItem(sourceItemId: string): Promise<Buffer> {
+  const sourceItem = readSourceItemBinaryContext(sourceItemId);
   if (!sourceItem) {
     throw new Error(`source item not found: ${sourceItemId}`);
   }
-  if (sourceItem.provider !== "box") {
-    throw new Error("packet PDF export currently supports Box source files only");
+  if (!isPdfLikeAsset(sourceItem.title, sourceItem.mime_type, sourceItem.authoritative_asset_uri)) {
+    throw new Error(`source item "${sourceItem.title ?? sourceItem.id}" is not a PDF and cannot be rendered`);
   }
-  const { client } = createBoxClient(config);
-  const buffer = await downloadBoxFileContent(client, sourceItem.remote_id);
-  return Buffer.from(buffer);
+
+  if (sourceItem.provider === "box") {
+    const config = resolveBoxProviderConfig();
+    if (!config) {
+      throw new Error("BOX_JWT_CONFIG_JSON or BOX_JWT_CONFIG_FILE must be configured");
+    }
+    const { client } = createBoxClient(config);
+    const buffer = await downloadBoxFileContent(client, sourceItem.remote_id);
+    return Buffer.from(buffer);
+  }
+
+  if (sourceItem.provider === "matter_upload") {
+    if (!sourceItem.authoritative_asset_uri?.startsWith("file:")) {
+      throw new Error(`upload source item is missing a readable file asset: ${sourceItem.id}`);
+    }
+    const buffer = await readFile(new URL(sourceItem.authoritative_asset_uri));
+    return Buffer.from(buffer);
+  }
+
+  throw new Error(`source item provider "${sourceItem.provider}" is not supported for PDF rendering`);
 }
 
-const app = Fastify({ logger: true });
+const TRUST_PROXY = readBooleanEnv("WC_TRUST_PROXY", false);
+const app = Fastify({ logger: true, trustProxy: TRUST_PROXY });
 app.setErrorHandler((error, _request, reply) => {
   app.log.error(error);
-  reply.code(500).send({
-    ok: false,
-    error: error instanceof Error ? error.message : "Internal server error"
-  });
+  const response = buildApiErrorResponse(error);
+  reply.code(response.statusCode).send(response.body);
 });
 
 const configuredOrigins = process.env.WC_CORS_ORIGIN?.split(",")
@@ -187,9 +260,13 @@ const configuredOrigins = process.env.WC_CORS_ORIGIN?.split(",")
 await app.register(cors, {
   origin: configuredOrigins && configuredOrigins.length > 0 ? configuredOrigins : ["http://127.0.0.1:5173", "http://localhost:5173"]
 });
+await app.register(helmet, {
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false
+});
 await app.register(multipart, {
   limits: {
-    fileSize: Number(process.env.WC_UPLOAD_MAX_BYTES ?? 45 * 1024 * 1024)
+    fileSize: readPositiveIntegerEnv("WC_UPLOAD_MAX_BYTES", 45 * 1024 * 1024, { min: 1 })
   }
 });
 
@@ -211,8 +288,19 @@ if (WC_API_KEY) {
   });
 }
 
-const ENABLE_DEV_ROUTES =
-  process.env.WC_ENABLE_DEV_ROUTES === "1" || process.env.NODE_ENV !== "production";
+const ENABLE_DEV_ROUTES = readDevRoutesEnabled();
+const EXPENSIVE_ROUTE_LIMIT_MAX = readPositiveIntegerEnv("WC_EXPENSIVE_ROUTE_LIMIT_MAX", 25, {
+  min: 1,
+  max: 100
+});
+const EXPENSIVE_ROUTE_LIMIT_WINDOW_MS = readPositiveIntegerEnv("WC_EXPENSIVE_ROUTE_LIMIT_WINDOW_MS", 60_000, {
+  min: 1_000,
+  max: 15 * 60_000
+});
+const expensiveRouteLimiter = createFixedWindowRateLimiter({
+  max: EXPENSIVE_ROUTE_LIMIT_MAX,
+  windowMs: EXPENSIVE_ROUTE_LIMIT_WINDOW_MS
+});
 
 function parseMetadataRecord(raw: string | null | undefined): Record<string, unknown> {
   if (!raw) {
@@ -226,6 +314,25 @@ function parseMetadataRecord(raw: string | null | undefined): Record<string, unk
   } catch {
     return {};
   }
+}
+
+function enforceExpensiveRouteRateLimit(
+  request: { ip: string },
+  reply: { header: (name: string, value: string | number) => unknown; code: (c: number) => { send: (b: unknown) => unknown } },
+  bucket: string
+): boolean {
+  const result = expensiveRouteLimiter.check(`${bucket}:${request.ip}`);
+  reply.header("x-rate-limit-limit", result.limit);
+  reply.header("x-rate-limit-remaining", result.remaining);
+  if (!result.allowed) {
+    reply.header("retry-after", result.retryAfterSeconds);
+    void reply.code(429).send({
+      ok: false,
+      error: "Too many expensive requests. Please retry shortly."
+    });
+    return false;
+  }
+  return true;
 }
 
 function readSourceConnectionByProvider(provider: "box" | "practicepanther") {
@@ -326,7 +433,7 @@ function updateSourceConnectionMetadata(connectionId: string, metadata: Record<s
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `
-  ).run(JSON.stringify(metadata), connectionId);
+  ).run(serializePracticePantherConnectionMetadata(metadata), connectionId);
 }
 
 function updatePracticePantherAuthStart(connectionId: string, authorizationUrl: string, metadata: Record<string, unknown>) {
@@ -341,7 +448,7 @@ function updatePracticePantherAuthStart(connectionId: string, authorizationUrl: 
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `
-  ).run(authorizationUrl, JSON.stringify(metadata), connectionId);
+  ).run(authorizationUrl, serializePracticePantherConnectionMetadata(metadata), connectionId);
 }
 
 function markPracticePantherConnectionError(connectionId: string, message: string) {
@@ -379,7 +486,12 @@ function completePracticePantherConnection(
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `
-  ).run(input.accountLabel ?? null, input.externalAccountId ?? null, JSON.stringify(input.metadata), connectionId);
+  ).run(
+    input.accountLabel ?? null,
+    input.externalAccountId ?? null,
+    serializePracticePantherConnectionMetadata(input.metadata),
+    connectionId
+  );
 }
 
 const ALLOWED_REDIRECT_ORIGINS = new Set([
@@ -469,7 +581,8 @@ app.addHook("onRequest", async (request, reply) => {
 app.get("/health", async () => ({
   ok: true,
   service: "wc-authoritative-api",
-  seeded_at_startup: true
+  seeded_at_startup: true,
+  startup_recovery: startupRecovery
 }));
 
 app.get("/api/workers/ocr/health", async () => {
@@ -755,6 +868,58 @@ function requireCase(caseId: string, reply: { code: (n: number) => { send: (b: u
   return true;
 }
 
+function requirePacketForCase(
+  caseId: string,
+  packetId: string,
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } }
+) {
+  const packetCase = getPacketCaseId(db, packetId);
+  if (!packetCase || packetCase.case_id !== caseId) {
+    reply.code(404).send({ ok: false, error: "packet not found" });
+    return false;
+  }
+  return true;
+}
+
+function requireSectionForCase(
+  caseId: string,
+  sectionId: string,
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } }
+) {
+  const sectionCase = getSectionCaseId(db, sectionId);
+  if (!sectionCase || sectionCase.case_id !== caseId) {
+    reply.code(404).send({ ok: false, error: "section not found" });
+    return false;
+  }
+  return true;
+}
+
+function requireExhibitForCase(
+  caseId: string,
+  exhibitId: string,
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } }
+) {
+  const exhibitCase = getExhibitCaseId(db, exhibitId);
+  if (!exhibitCase || exhibitCase.case_id !== caseId) {
+    reply.code(404).send({ ok: false, error: "exhibit not found" });
+    return false;
+  }
+  return true;
+}
+
+function requireExhibitItemForCase(
+  caseId: string,
+  itemId: string,
+  reply: { code: (n: number) => { send: (b: unknown) => unknown } }
+) {
+  const itemCase = getExhibitItemCaseId(db, itemId);
+  if (!itemCase || itemCase.case_id !== caseId) {
+    reply.code(404).send({ ok: false, error: "exhibit item not found" });
+    return false;
+  }
+  return true;
+}
+
 app.get("/api/cases/:caseId/document-templates", async (request, reply) => {
   const { caseId } = request.params as { caseId: string };
   if (!requireCase(caseId, reply)) {
@@ -1029,8 +1194,9 @@ app.post("/api/cases/:caseId/exhibit-packets", async (request, reply) => {
   return { ok: true, case_id: caseId, packet: packet.packet };
 });
 
-app.patch("/api/exhibit-packets/:packetId", async (request, reply) => {
-  const { packetId } = request.params as { packetId: string };
+app.patch("/api/cases/:caseId/exhibit-packets/:packetId", async (request, reply) => {
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
+  if (!requirePacketForCase(caseId, packetId, reply)) return;
   const body = request.body as
     | {
         packet_name?: string | null;
@@ -1056,7 +1222,8 @@ app.patch("/api/exhibit-packets/:packetId", async (request, reply) => {
     runStatus: body?.run_status
   });
   if (updated && typeof updated === "object" && "ok" in updated && updated.ok === false) {
-    return reply.code(404).send({ ok: false, error: updated.error });
+    const statusCode = updated.error === "packet not found" ? 404 : 400;
+    return reply.code(statusCode).send({ ok: false, error: updated.error });
   }
   if (!updated) {
     return reply.code(404).send({ ok: false, error: "packet not found" });
@@ -1065,8 +1232,9 @@ app.patch("/api/exhibit-packets/:packetId", async (request, reply) => {
   return { ok: true, packet: updated };
 });
 
-app.post("/api/exhibit-packets/:packetId/sections", async (request, reply) => {
-  const { packetId } = request.params as { packetId: string };
+app.post("/api/cases/:caseId/exhibit-packets/:packetId/sections", async (request, reply) => {
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
+  if (!requirePacketForCase(caseId, packetId, reply)) return;
   const body = request.body as { section_key?: string; section_label?: string } | undefined;
   const packet = createExhibitSection(db, {
     packetId,
@@ -1080,8 +1248,9 @@ app.post("/api/exhibit-packets/:packetId/sections", async (request, reply) => {
   return { ok: true, packet: packet.packet };
 });
 
-app.post("/api/exhibit-packets/:packetId/sections/reorder", async (request, reply) => {
-  const { packetId } = request.params as { packetId: string };
+app.post("/api/cases/:caseId/exhibit-packets/:packetId/sections/reorder", async (request, reply) => {
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
+  if (!requirePacketForCase(caseId, packetId, reply)) return;
   const body = request.body as { section_ids?: string[] } | undefined;
   if (!body?.section_ids?.length) {
     return reply.code(400).send({ ok: false, error: "section_ids are required" });
@@ -1094,8 +1263,9 @@ app.post("/api/exhibit-packets/:packetId/sections/reorder", async (request, repl
   return { ok: true, packet: result.packet };
 });
 
-app.post("/api/exhibit-sections/:sectionId/exhibits/reorder", async (request, reply) => {
-  const { sectionId } = request.params as { sectionId: string };
+app.post("/api/cases/:caseId/exhibit-sections/:sectionId/exhibits/reorder", async (request, reply) => {
+  const { caseId, sectionId } = request.params as { caseId: string; sectionId: string };
+  if (!requireSectionForCase(caseId, sectionId, reply)) return;
   const body = request.body as { exhibit_ids?: string[] } | undefined;
   if (!body?.exhibit_ids?.length) {
     return reply.code(400).send({ ok: false, error: "exhibit_ids are required" });
@@ -1108,8 +1278,9 @@ app.post("/api/exhibit-sections/:sectionId/exhibits/reorder", async (request, re
   return { ok: true, packet: result.packet };
 });
 
-app.patch("/api/exhibit-sections/:sectionId", async (request, reply) => {
-  const { sectionId } = request.params as { sectionId: string };
+app.patch("/api/cases/:caseId/exhibit-sections/:sectionId", async (request, reply) => {
+  const { caseId, sectionId } = request.params as { caseId: string; sectionId: string };
+  if (!requireSectionForCase(caseId, sectionId, reply)) return;
   const body = request.body as { section_label?: string | null; sort_order?: number | null } | undefined;
   const packet = updateExhibitSection(db, {
     sectionId,
@@ -1122,8 +1293,9 @@ app.patch("/api/exhibit-sections/:sectionId", async (request, reply) => {
   return { ok: true, packet };
 });
 
-app.delete("/api/exhibit-sections/:sectionId", async (request, reply) => {
-  const { sectionId } = request.params as { sectionId: string };
+app.delete("/api/cases/:caseId/exhibit-sections/:sectionId", async (request, reply) => {
+  const { caseId, sectionId } = request.params as { caseId: string; sectionId: string };
+  if (!requireSectionForCase(caseId, sectionId, reply)) return;
   const packet = deleteExhibitSection(db, sectionId);
   if (!packet) {
     return reply.code(404).send({ ok: false, error: "section not found" });
@@ -1131,8 +1303,9 @@ app.delete("/api/exhibit-sections/:sectionId", async (request, reply) => {
   return { ok: true, packet };
 });
 
-app.post("/api/exhibit-sections/:sectionId/exhibits", async (request, reply) => {
-  const { sectionId } = request.params as { sectionId: string };
+app.post("/api/cases/:caseId/exhibit-sections/:sectionId/exhibits", async (request, reply) => {
+  const { caseId, sectionId } = request.params as { caseId: string; sectionId: string };
+  if (!requireSectionForCase(caseId, sectionId, reply)) return;
   const body = request.body as
     | {
         exhibit_label?: string | null;
@@ -1195,8 +1368,9 @@ app.post("/api/cases/:caseId/exhibits", async (request, reply) => {
   return { ok: true, packet };
 });
 
-app.patch("/api/exhibits/:exhibitId", async (request, reply) => {
-  const { exhibitId } = request.params as { exhibitId: string };
+app.patch("/api/cases/:caseId/exhibits/:exhibitId", async (request, reply) => {
+  const { caseId, exhibitId } = request.params as { caseId: string; exhibitId: string };
+  if (!requireExhibitForCase(caseId, exhibitId, reply)) return;
   const body = request.body as
     | {
         exhibit_label?: string | null;
@@ -1224,8 +1398,9 @@ app.patch("/api/exhibits/:exhibitId", async (request, reply) => {
   return { ok: true, packet };
 });
 
-app.delete("/api/exhibits/:exhibitId", async (request, reply) => {
-  const { exhibitId } = request.params as { exhibitId: string };
+app.delete("/api/cases/:caseId/exhibits/:exhibitId", async (request, reply) => {
+  const { caseId, exhibitId } = request.params as { caseId: string; exhibitId: string };
+  if (!requireExhibitForCase(caseId, exhibitId, reply)) return;
   const packet = deleteExhibit(db, exhibitId);
   if (!packet) {
     return reply.code(404).send({ ok: false, error: "exhibit not found" });
@@ -1233,8 +1408,9 @@ app.delete("/api/exhibits/:exhibitId", async (request, reply) => {
   return { ok: true, packet };
 });
 
-app.post("/api/exhibits/:exhibitId/items", async (request, reply) => {
-  const { exhibitId } = request.params as { exhibitId: string };
+app.post("/api/cases/:caseId/exhibits/:exhibitId/items", async (request, reply) => {
+  const { caseId, exhibitId } = request.params as { caseId: string; exhibitId: string };
+  if (!requireExhibitForCase(caseId, exhibitId, reply)) return;
   const body = request.body as { source_item_id?: string; notes?: string | null } | undefined;
   if (!body?.source_item_id) {
     return reply.code(400).send({ ok: false, error: "source_item_id is required" });
@@ -1251,8 +1427,9 @@ app.post("/api/exhibits/:exhibitId/items", async (request, reply) => {
   return { ok: true, packet: result.packet };
 });
 
-app.delete("/api/exhibit-items/:itemId", async (request, reply) => {
-  const { itemId } = request.params as { itemId: string };
+app.delete("/api/cases/:caseId/exhibit-items/:itemId", async (request, reply) => {
+  const { caseId, itemId } = request.params as { caseId: string; itemId: string };
+  if (!requireExhibitItemForCase(caseId, itemId, reply)) return;
   const packet = removeExhibitItem(db, itemId);
   if (!packet) {
     return reply.code(404).send({ ok: false, error: "exhibit item not found" });
@@ -1260,8 +1437,9 @@ app.delete("/api/exhibit-items/:itemId", async (request, reply) => {
   return { ok: true, packet };
 });
 
-app.patch("/api/exhibit-items/:itemId/page-rules", async (request, reply) => {
-  const { itemId } = request.params as { itemId: string };
+app.patch("/api/cases/:caseId/exhibit-items/:itemId/page-rules", async (request, reply) => {
+  const { caseId, itemId } = request.params as { caseId: string; itemId: string };
+  if (!requireExhibitItemForCase(caseId, itemId, reply)) return;
   const body = request.body as { exclude_canonical_page_ids?: string[] } | undefined;
   if (body?.exclude_canonical_page_ids && body.exclude_canonical_page_ids.length > 1000) {
     return reply.code(400).send({ ok: false, error: "exclude_canonical_page_ids may not exceed 1000 items" });
@@ -1277,8 +1455,9 @@ app.patch("/api/exhibit-items/:itemId/page-rules", async (request, reply) => {
   return { ok: true, packet: result.packet };
 });
 
-app.get("/api/exhibit-packets/:packetId/suggestions", async (request, reply) => {
-  const { packetId } = request.params as { packetId: string };
+app.get("/api/cases/:caseId/exhibit-packets/:packetId/suggestions", async (request, reply) => {
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
+  if (!requirePacketForCase(caseId, packetId, reply)) return;
   const suggestions = getPacketSuggestions(db, packetId);
   if (!suggestions) {
     return reply.code(404).send({ ok: false, error: "packet not found" });
@@ -1286,8 +1465,9 @@ app.get("/api/exhibit-packets/:packetId/suggestions", async (request, reply) => 
   return { ok: true, suggestions };
 });
 
-app.get("/api/exhibit-packets/:packetId/history", async (request, reply) => {
-  const { packetId } = request.params as { packetId: string };
+app.get("/api/cases/:caseId/exhibit-packets/:packetId/history", async (request, reply) => {
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
+  if (!requirePacketForCase(caseId, packetId, reply)) return;
   const history = getPacketHistory(db, packetId);
   if (!history) {
     return reply.code(404).send({ ok: false, error: "packet not found" });
@@ -1295,8 +1475,9 @@ app.get("/api/exhibit-packets/:packetId/history", async (request, reply) => {
   return { ok: true, history };
 });
 
-app.post("/api/exhibit-packets/:packetId/suggestions/:suggestionId/resolve", async (request, reply) => {
-  const { packetId, suggestionId } = request.params as { packetId: string; suggestionId: string };
+app.post("/api/cases/:caseId/exhibit-packets/:packetId/suggestions/:suggestionId/resolve", async (request, reply) => {
+  const { caseId, packetId, suggestionId } = request.params as { caseId: string; packetId: string; suggestionId: string };
+  if (!requirePacketForCase(caseId, packetId, reply)) return;
   const body = request.body as { action?: "accept" | "dismiss"; note?: string | null } | undefined;
   if (body?.action !== "accept" && body?.action !== "dismiss") {
     return reply.code(400).send({ ok: false, error: "action must be accept or dismiss" });
@@ -1314,8 +1495,9 @@ app.post("/api/exhibit-packets/:packetId/suggestions/:suggestionId/resolve", asy
   return { ok: true, packet: result.packet };
 });
 
-app.post("/api/exhibit-packets/:packetId/finalize", async (request, reply) => {
-  const { packetId } = request.params as { packetId: string };
+app.post("/api/cases/:caseId/exhibit-packets/:packetId/finalize", async (request, reply) => {
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
+  if (!requirePacketForCase(caseId, packetId, reply)) return;
   const result = finalizeExhibitPacket(db, packetId);
   if (!result) {
     return reply.code(404).send({ ok: false, error: "packet not found" });
@@ -1323,15 +1505,16 @@ app.post("/api/exhibit-packets/:packetId/finalize", async (request, reply) => {
   return { ok: true, packet: result.packet, suggestions: result.suggestions, preview: result.preview };
 });
 
-app.post("/api/exhibit-packets/:packetId/exports/packet-pdf", async (request, reply) => {
-  const { packetId } = request.params as { packetId: string };
+app.post("/api/cases/:caseId/exhibit-packets/:packetId/exports/packet-pdf", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "packet-pdf-export")) return;
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
   const packetCase = getPacketCaseId(db, packetId);
-  if (!packetCase) {
+  if (!packetCase || packetCase.case_id !== caseId) {
     return reply.code(404).send({ ok: false, error: "packet not found" });
   }
   const layout = parsePacketPdfExportOptions(request.body);
   try {
-    const result = await runPacketPdfExport(db, packetId, fetchBoxPdfBytesForSourceItem, layout);
+    const result = await runPacketPdfExport(db, packetId, fetchPdfBytesForSourceItem, layout);
     if (!result.ok) {
       const code = /not found/i.test(result.error) ? 404 : 400;
       return reply.code(code).send({
@@ -1354,18 +1537,19 @@ app.post("/api/exhibit-packets/:packetId/exports/packet-pdf", async (request, re
   }
 });
 
-app.get("/api/exhibit-packets/:packetId/exports", async (request, reply) => {
-  const { packetId } = request.params as { packetId: string };
-  if (!getPacketCaseId(db, packetId)) {
+app.get("/api/cases/:caseId/exhibit-packets/:packetId/exports", async (request, reply) => {
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
+  const packetCase = getPacketCaseId(db, packetId);
+  if (!packetCase || packetCase.case_id !== caseId) {
     return reply.code(404).send({ ok: false, error: "packet not found" });
   }
   return { ok: true, exports: listPacketExportsForPacket(db, packetId) };
 });
 
-app.get("/api/exhibit-packet-exports/:exportId", async (request, reply) => {
-  const { exportId } = request.params as { exportId: string };
+app.get("/api/cases/:caseId/exhibit-packet-exports/:exportId", async (request, reply) => {
+  const { caseId, exportId } = request.params as { caseId: string; exportId: string };
   const row = getPacketExportRow(db, exportId);
-  if (!row) {
+  if (!row || row.case_id !== caseId) {
     return reply.code(404).send({ ok: false, error: "export not found" });
   }
   let manifest: unknown = null;
@@ -1385,10 +1569,10 @@ app.get("/api/exhibit-packet-exports/:exportId", async (request, reply) => {
   };
 });
 
-app.get("/api/exhibit-packet-exports/:exportId/pdf", async (request, reply) => {
-  const { exportId } = request.params as { exportId: string };
+app.get("/api/cases/:caseId/exhibit-packet-exports/:exportId/pdf", async (request, reply) => {
+  const { caseId, exportId } = request.params as { caseId: string; exportId: string };
   const row = getPacketExportRow(db, exportId);
-  if (!row || row.status !== "complete" || !row.pdf_relative_path) {
+  if (!row || row.case_id !== caseId || row.status !== "complete" || !row.pdf_relative_path) {
     return reply.code(404).send({ ok: false, error: "export PDF not available" });
   }
   const abs = resolveExportAbsolutePath(row.pdf_relative_path);
@@ -1678,6 +1862,7 @@ app.get("/api/connectors/practicepanther/callback", async (request, reply) => {
 });
 
 app.post("/api/connectors/practicepanther/sync", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "practicepanther-sync")) return;
   if (!isPracticePantherProductionSyncConfigured()) {
     return reply.code(400).send({
       ok: false,
@@ -1942,6 +2127,7 @@ app.post("/api/connectors/practicepanther/sync", async (request, reply) => {
 });
 
 app.post("/api/connectors/box/sync", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "box-sync")) return;
   const config = resolveBoxProviderConfig();
   if (!config) {
     return reply.code(400).send({
@@ -1992,8 +2178,8 @@ app.post("/api/connectors/box/sync", async (request, reply) => {
     });
   }
 
-  const maxFiles = Math.min(Math.max(body.max_files ?? 50_000, 1), 200_000);
-  const maxFolders = Math.min(Math.max(body.max_folders ?? 25_000, 1), 200_000);
+  const maxFiles = clampPositiveIntegerInput(body.max_files, 50_000, { min: 1, max: 200_000 });
+  const maxFolders = clampPositiveIntegerInput(body.max_folders, 25_000, { min: 1, max: 200_000 });
 
   const { client } = createBoxClient(config);
   const collected = await collectBoxRecursiveFileInventory(client, rootFolderId, {
@@ -2099,49 +2285,30 @@ app.post("/api/connectors/:provider/auth/complete", async (request, reply) => {
   return result;
 });
 
-app.get("/api/files/:sourceItemId/content", async (request, reply) => {
-  const config = resolveBoxProviderConfig();
-  if (!config) {
-    return reply.code(400).send({
-      ok: false,
-      error: "BOX_JWT_CONFIG_JSON or BOX_JWT_CONFIG_FILE must be configured"
-    });
-  }
-
-  const { sourceItemId } = request.params as { sourceItemId: string };
-  const sourceItem = db
-    .prepare(
-      `
-        SELECT provider, remote_id, title, mime_type
-        FROM source_items
-        WHERE id = ?
-        LIMIT 1
-      `
-    )
-    .get(sourceItemId) as
-    | {
-        provider: string;
-        remote_id: string;
-        title: string | null;
-        mime_type: string | null;
-      }
-    | undefined;
-
-  if (!sourceItem) {
+app.get("/api/cases/:caseId/source-items/:sourceItemId/content", async (request, reply) => {
+  const { caseId, sourceItemId } = request.params as { caseId: string; sourceItemId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  const sourceItem = readSourceItemBinaryContext(sourceItemId);
+  if (!sourceItem || sourceItem.case_id !== caseId) {
     return reply.code(404).send({ ok: false, error: "source item not found" });
   }
-  if (sourceItem.provider !== "box") {
-    return reply.code(400).send({ ok: false, error: "source item is not a Box file" });
+  if (!isPdfLikeAsset(sourceItem.title, sourceItem.mime_type, sourceItem.authoritative_asset_uri)) {
+    return reply.code(400).send({ ok: false, error: "preview currently supports PDF source items only" });
   }
 
-  const { client } = createBoxClient(config);
-  const buffer = await downloadBoxFileContent(client, sourceItem.remote_id);
-  reply.header("content-type", sourceItem.mime_type ?? "application/octet-stream");
-  reply.header(
-    "content-disposition",
-    `inline; filename="${encodeURIComponent(sourceItem.title ?? `${sourceItem.remote_id}.bin`)}"`
-  );
-  return reply.send(Buffer.from(buffer));
+  try {
+    const buffer = await fetchPdfBytesForSourceItem(sourceItemId);
+    reply.header("content-type", sourceItem.mime_type ?? "application/pdf");
+    reply.header(
+      "content-disposition",
+      `inline; filename="${encodeURIComponent(sourceItem.title ?? `${sourceItem.remote_id}.pdf`)}"`
+    );
+    return reply.send(buffer);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Preview failed";
+    const code = /not found/i.test(message) ? 404 : 400;
+    return reply.code(code).send({ ok: false, error: message });
+  }
 });
 
 app.post("/api/connectors/box/development/hydrate", async (request, reply) => {
@@ -2280,9 +2447,11 @@ app.post("/dev/source-items", async (request, reply) => {
   return { ok: true, source_item_id: sourceItem?.id ?? null, snapshot_id: result.snapshot_id };
 });
 
-app.post("/api/source-items/:sourceItemId/classify", async (request, reply) => {
+app.post("/api/cases/:caseId/source-items/:sourceItemId/classify", async (request, reply) => {
   const body = request.body as { filename?: string } | undefined;
-  const { sourceItemId } = request.params as { sourceItemId: string };
+  const { caseId, sourceItemId } = request.params as { caseId: string; sourceItemId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertSourceItemBelongsToCase(caseId, sourceItemId, reply)) return;
 
   const sourceItem = db
     .prepare(`SELECT title FROM source_items WHERE id = ? LIMIT 1`)
@@ -2305,14 +2474,16 @@ app.post("/api/source-items/:sourceItemId/classify", async (request, reply) => {
   return result;
 });
 
-app.patch("/api/source-items/:sourceItemId/classification", async (request, reply) => {
-  const { sourceItemId } = request.params as { sourceItemId: string };
+app.patch("/api/cases/:caseId/source-items/:sourceItemId/classification", async (request, reply) => {
+  const { caseId, sourceItemId } = request.params as { caseId: string; sourceItemId: string };
   const body = request.body as
     | {
         document_type_id?: string | null;
         clear?: boolean;
       }
     | undefined;
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertSourceItemBelongsToCase(caseId, sourceItemId, reply)) return;
 
   const sourceItem = db
     .prepare(`SELECT id, case_id FROM source_items WHERE id = ? LIMIT 1`)
@@ -2420,6 +2591,7 @@ app.post("/dev/source-items/:sourceItemId/normalize", async (request, reply) => 
 });
 
 app.post("/dev/cases/:caseId/normalize-documents", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "normalize-documents")) return;
   const body = request.body as
     | {
         source_item_ids?: string[];
@@ -2444,6 +2616,7 @@ app.post("/dev/cases/:caseId/normalize-documents", async (request, reply) => {
 });
 
 app.post("/api/cases/:caseId/normalize-documents", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "normalize-documents")) return;
   const body = request.body as
     | {
         source_item_ids?: string[];
@@ -2561,6 +2734,7 @@ app.get("/api/cases/:caseId/review-queue", async (request, reply) => {
 });
 
 app.post("/api/cases/:caseId/ocr/queue", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "ocr-queue")) return;
   const body = request.body as
     | {
         canonical_document_id?: string | null;
@@ -2593,6 +2767,7 @@ app.post("/api/cases/:caseId/ocr/queue", async (request, reply) => {
 });
 
 app.post("/api/cases/:caseId/extractions/run-heuristics", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "heuristic-extractions")) return;
   const { caseId } = request.params as { caseId: string };
   const body = request.body as { skip_if_exists?: boolean } | undefined;
 
@@ -2613,9 +2788,11 @@ app.post("/api/cases/:caseId/extractions/run-heuristics", async (request, reply)
   return result;
 });
 
-app.post("/api/canonical-pages/:canonicalPageId/ocr-review/resolve", async (request, reply) => {
-  const { canonicalPageId } = request.params as { canonicalPageId: string };
+app.post("/api/cases/:caseId/canonical-pages/:canonicalPageId/ocr-review/resolve", async (request, reply) => {
+  const { caseId, canonicalPageId } = request.params as { caseId: string; canonicalPageId: string };
   const body = request.body as { accept_empty?: boolean; resolution_note?: string | null } | undefined;
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertCanonicalPageBelongsToCase(caseId, canonicalPageId, reply)) return;
 
   const result = db.transaction(() =>
     resolveCanonicalPageOcrReview(db, {
@@ -2633,7 +2810,7 @@ app.post("/api/canonical-pages/:canonicalPageId/ocr-review/resolve", async (requ
   return result;
 });
 
-app.post("/api/canonical-pages/:canonicalPageId/ocr-attempts", async (request, reply) => {
+app.post("/api/cases/:caseId/canonical-pages/:canonicalPageId/ocr-attempts", async (request, reply) => {
   const body = request.body as
     | {
         engine?: string;
@@ -2643,7 +2820,9 @@ app.post("/api/canonical-pages/:canonicalPageId/ocr-attempts", async (request, r
         metadata_json?: unknown;
       }
     | undefined;
-  const { canonicalPageId } = request.params as { canonicalPageId: string };
+  const { caseId, canonicalPageId } = request.params as { caseId: string; canonicalPageId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertCanonicalPageBelongsToCase(caseId, canonicalPageId, reply)) return;
 
   if (!body?.engine || !body?.status) {
     return reply.code(400).send({ ok: false, error: "engine and status are required" });
@@ -2670,7 +2849,7 @@ app.post("/api/canonical-pages/:canonicalPageId/ocr-attempts", async (request, r
   return result;
 });
 
-app.post("/api/canonical-pages/:canonicalPageId/extractions", async (request, reply) => {
+app.post("/api/cases/:caseId/canonical-pages/:canonicalPageId/extractions", async (request, reply) => {
   const body = request.body as
     | {
         schema_key?: string;
@@ -2679,7 +2858,9 @@ app.post("/api/canonical-pages/:canonicalPageId/extractions", async (request, re
         confidence?: number | null;
       }
     | undefined;
-  const { canonicalPageId } = request.params as { canonicalPageId: string };
+  const { caseId, canonicalPageId } = request.params as { caseId: string; canonicalPageId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertCanonicalPageBelongsToCase(caseId, canonicalPageId, reply)) return;
 
   if (!body?.schema_key?.trim() || !body?.extractor_version?.trim() || !body?.payload || typeof body.payload !== "object") {
     return reply.code(400).send({
@@ -2715,6 +2896,7 @@ app.get("/api/cases/:caseId/projection", async (request, reply) => {
 
 app.post("/api/cases/:caseId/regression-checks", async (request, reply) => {
   const { caseId } = request.params as { caseId: string };
+  if (!assertCaseExists(caseId, reply)) return;
   const body = request.body as
     | {
         check_type?: string;
@@ -2747,8 +2929,9 @@ app.post("/api/cases/:caseId/regression-checks", async (request, reply) => {
   };
 });
 
-app.post("/api/cases/:caseId/run-manifests", async (request) => {
+app.post("/api/cases/:caseId/run-manifests", async (request, reply) => {
   const { caseId } = request.params as { caseId: string };
+  if (!assertCaseExists(caseId, reply)) return;
   const body = request.body as
     | {
         product_preset_id?: string | null;
@@ -2827,9 +3010,132 @@ function assertCaseExists(
   return true;
 }
 
+function assertPacketBelongsToCase(
+  caseId: string,
+  packetId: string,
+  reply: { code: (c: number) => { send: (b: unknown) => unknown } }
+): boolean {
+  const packetCaseId = getPacketCaseId(db, packetId);
+  if (!packetCaseId || packetCaseId.case_id !== caseId) {
+    void reply.code(404).send({ ok: false, error: "packet not found for this case" });
+    return false;
+  }
+  return true;
+}
+
+function resolvePackageRunCaseId(runId: string): string | null {
+  const row = db
+    .prepare(
+      `
+        SELECT ep.case_id
+        FROM package_runs pr
+        JOIN exhibit_packets ep ON ep.id = pr.packet_id
+        WHERE pr.id = ?
+        LIMIT 1
+      `
+    )
+    .get(runId) as { case_id: string } | undefined;
+  return row?.case_id ?? null;
+}
+
+function assertPackageRunBelongsToCase(
+  caseId: string,
+  runId: string,
+  reply: { code: (c: number) => { send: (b: unknown) => unknown } }
+): boolean {
+  const runCaseId = resolvePackageRunCaseId(runId);
+  if (!runCaseId || runCaseId !== caseId) {
+    void reply.code(404).send({ ok: false, error: "package run not found for this case" });
+    return false;
+  }
+  return true;
+}
+
+function resolvePackageRuleCaseId(ruleId: string): string | null {
+  const row = db.prepare(`SELECT case_id FROM package_rules WHERE id = ? LIMIT 1`).get(ruleId) as
+    | { case_id: string }
+    | undefined;
+  return row?.case_id ?? null;
+}
+
+function assertPackageRuleBelongsToCase(
+  caseId: string,
+  ruleId: string,
+  reply: { code: (c: number) => { send: (b: unknown) => unknown } }
+): boolean {
+  const ruleCaseId = resolvePackageRuleCaseId(ruleId);
+  if (!ruleCaseId || ruleCaseId !== caseId) {
+    void reply.code(404).send({ ok: false, error: "rule not found for this case" });
+    return false;
+  }
+  return true;
+}
+
+function assertSourceItemsBelongToCase(
+  caseId: string,
+  sourceItemIds: string[],
+  reply: { code: (c: number) => { send: (b: unknown) => unknown } }
+): boolean {
+  const missingIds = listSourceItemsMissingFromCase(db, caseId, sourceItemIds);
+  if (missingIds.length > 0) {
+    void reply.code(404).send({ ok: false, error: "source item not found for this case" });
+    return false;
+  }
+  return true;
+}
+
+function resolveSourceItemCaseId(sourceItemId: string): string | null {
+  const row = db.prepare(`SELECT case_id FROM source_items WHERE id = ? LIMIT 1`).get(sourceItemId) as
+    | { case_id: string }
+    | undefined;
+  return row?.case_id ?? null;
+}
+
+function assertSourceItemBelongsToCase(
+  caseId: string,
+  sourceItemId: string,
+  reply: { code: (c: number) => { send: (b: unknown) => unknown } }
+): boolean {
+  const sourceItemCaseId = resolveSourceItemCaseId(sourceItemId);
+  if (!sourceItemCaseId || sourceItemCaseId !== caseId) {
+    void reply.code(404).send({ ok: false, error: "source item not found for this case" });
+    return false;
+  }
+  return true;
+}
+
+function resolveCanonicalPageCaseId(canonicalPageId: string): string | null {
+  const row = db
+    .prepare(
+      `
+        SELECT cd.case_id
+        FROM canonical_pages cp
+        JOIN canonical_documents cd ON cd.id = cp.canonical_doc_id
+        WHERE cp.id = ?
+        LIMIT 1
+      `
+    )
+    .get(canonicalPageId) as { case_id: string } | undefined;
+  return row?.case_id ?? null;
+}
+
+function assertCanonicalPageBelongsToCase(
+  caseId: string,
+  canonicalPageId: string,
+  reply: { code: (c: number) => { send: (b: unknown) => unknown } }
+): boolean {
+  const canonicalPageCaseId = resolveCanonicalPageCaseId(canonicalPageId);
+  if (!canonicalPageCaseId || canonicalPageCaseId !== caseId) {
+    void reply.code(404).send({ ok: false, error: "canonical page not found for this case" });
+    return false;
+  }
+  return true;
+}
+
 // ── Package workbench: uploads, rules, golden examples, retrieval, package runs ─
 
 app.post("/api/cases/:caseId/uploads", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "case-upload")) return;
   const { caseId } = request.params as { caseId: string };
   if (!assertCaseExists(caseId, reply)) return;
 
@@ -2884,6 +3190,62 @@ app.get("/api/cases/:caseId/timeline", async (request, reply) => {
     summary: projection.slices.case_timeline_slice.summary
   };
 });
+
+app.get("/api/cases/:caseId/activity", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  const events = db
+    .prepare(
+      `
+        SELECT id, branch_instance_id, preset_id, event_name, source_type, source_id, occurred_at, payload_json, created_at
+        FROM case_events
+        WHERE case_id = ?
+        ORDER BY occurred_at DESC, created_at DESC
+        LIMIT 100
+      `
+    )
+    .all(caseId);
+  return { ok: true, events };
+});
+
+app.get("/api/cases/:caseId/hearing-prep", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const query = request.query as { packet_id?: string } | undefined;
+  if (!assertCaseExists(caseId, reply)) return;
+  const snapshot = buildHearingPrepSnapshot(db, {
+    caseId,
+    packetId: query?.packet_id?.trim() || null
+  });
+  if (!snapshot) {
+    return reply.code(404).send({ ok: false, error: "hearing prep snapshot unavailable" });
+  }
+  return { ok: true, case_id: caseId, snapshot };
+});
+
+app.get("/api/cases/:caseId/historical-flow", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  return {
+    ok: true,
+    case_id: caseId,
+    events: buildHistoricalCaseFlow(db, caseId)
+  };
+});
+
+app.get("/api/cases/:caseId/historical-recommendations", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  return {
+    ok: true,
+    case_id: caseId,
+    ...recommendNextHistoricalEvents(db, caseId)
+  };
+});
+
+app.get("/api/intelligence/historical-flow-summary", async () => ({
+  ok: true,
+  summary: summarizeHistoricalCaseFlows(db)
+}));
 
 app.get("/api/cases/:caseId/package-rules", async (request, reply) => {
   const { caseId } = request.params as { caseId: string };
@@ -2942,17 +3304,15 @@ app.post("/api/cases/:caseId/package-rules", async (request, reply) => {
   return { ok: true, rule: row };
 });
 
-app.patch("/api/package-rules/:ruleId", async (request, reply) => {
-  const { ruleId } = request.params as { ruleId: string };
+app.patch("/api/cases/:caseId/package-rules/:ruleId", async (request, reply) => {
+  const { caseId, ruleId } = request.params as { caseId: string; ruleId: string };
   const body = request.body as {
     rule_label?: string;
     instructions?: string;
     sort_order?: number;
   };
-  const existing = db.prepare(`SELECT case_id FROM package_rules WHERE id = ?`).get(ruleId) as { case_id: string } | undefined;
-  if (!existing) {
-    return reply.code(404).send({ ok: false, error: "rule not found" });
-  }
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertPackageRuleBelongsToCase(caseId, ruleId, reply)) return;
   const updates: string[] = [];
   const params: Array<string | number | null> = [];
   if (body.rule_label !== undefined) {
@@ -2975,8 +3335,10 @@ app.patch("/api/package-rules/:ruleId", async (request, reply) => {
   return { ok: true, rule: db.prepare(`SELECT * FROM package_rules WHERE id = ?`).get(ruleId) };
 });
 
-app.delete("/api/package-rules/:ruleId", async (request, reply) => {
-  const { ruleId } = request.params as { ruleId: string };
+app.delete("/api/cases/:caseId/package-rules/:ruleId", async (request, reply) => {
+  const { caseId, ruleId } = request.params as { caseId: string; ruleId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertPackageRuleBelongsToCase(caseId, ruleId, reply)) return;
   const run = db.prepare(`DELETE FROM package_rules WHERE id = ?`).run(ruleId);
   if (run.changes === 0) {
     return reply.code(404).send({ ok: false, error: "rule not found" });
@@ -3028,9 +3390,10 @@ app.post("/api/cases/:caseId/golden-examples", async (request, reply) => {
   return { ok: true, golden_example: db.prepare(`SELECT * FROM golden_examples WHERE id = ?`).get(id) };
 });
 
-app.delete("/api/golden-examples/:exampleId", async (request, reply) => {
-  const { exampleId } = request.params as { exampleId: string };
-  const run = db.prepare(`DELETE FROM golden_examples WHERE id = ?`).run(exampleId);
+app.delete("/api/cases/:caseId/golden-examples/:exampleId", async (request, reply) => {
+  const { caseId, exampleId } = request.params as { caseId: string; exampleId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  const run = db.prepare(`DELETE FROM golden_examples WHERE id = ? AND case_id = ?`).run(exampleId, caseId);
   if (run.changes === 0) {
     return reply.code(404).send({ ok: false, error: "not found" });
   }
@@ -3066,11 +3429,12 @@ app.post("/api/cases/:caseId/retrieval/test", async (request, reply) => {
     }
   }
   if (mode === "document" && body.source_item_id) {
-    const full = getFullCanonicalTextForSourceItem(db, body.source_item_id);
+    const full = getFullCanonicalTextForSourceItemInCase(db, caseId, body.source_item_id);
     return { ok: true, mode, document: full };
   }
   if (mode === "chunk" && body.source_item_id && body.page_start && body.page_end) {
-    const chunks = getPageChunks(db, {
+    const chunks = getPageChunksInCase(db, {
+      caseId,
       sourceItemId: body.source_item_id,
       pageStart: body.page_start,
       pageEnd: body.page_end
@@ -3078,6 +3442,9 @@ app.post("/api/cases/:caseId/retrieval/test", async (request, reply) => {
     return { ok: true, mode, chunks };
   }
   if (mode === "bundle") {
+    if (body.source_item_id && !assertSourceItemsBelongToCase(caseId, [body.source_item_id], reply)) {
+      return;
+    }
     const bundle = buildPackageBundle(db, {
       caseId,
       packageType,
@@ -3089,9 +3456,14 @@ app.post("/api/cases/:caseId/retrieval/test", async (request, reply) => {
 });
 
 app.post("/api/cases/:caseId/exhibit-packets/:packetId/package-runs", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "package-run")) return;
   const { caseId, packetId } = request.params as { caseId: string; packetId: string };
   const body = request.body as { whole_file_source_item_ids?: string[] } | undefined;
   if (!assertCaseExists(caseId, reply)) return;
+  if (!assertPacketBelongsToCase(caseId, packetId, reply)) return;
+  if (body?.whole_file_source_item_ids?.length && !assertSourceItemsBelongToCase(caseId, body.whole_file_source_item_ids, reply)) {
+    return;
+  }
   const run = await runPackageWorker(db, {
     caseId,
     packetId,
@@ -3100,17 +3472,17 @@ app.post("/api/cases/:caseId/exhibit-packets/:packetId/package-runs", async (req
   return { ok: true, run };
 });
 
-app.get("/api/exhibit-packets/:packetId/package-runs", async (request, reply) => {
-  const { packetId } = request.params as { packetId: string };
-  const packetCase = getPacketCaseId(db, packetId);
-  if (!packetCase) {
-    return reply.code(404).send({ ok: false, error: "packet not found" });
-  }
+app.get("/api/cases/:caseId/exhibit-packets/:packetId/package-runs", async (request, reply) => {
+  const { caseId, packetId } = request.params as { caseId: string; packetId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertPacketBelongsToCase(caseId, packetId, reply)) return;
   return { ok: true, runs: listPackageRunsForPacket(db, packetId) };
 });
 
-app.get("/api/package-runs/:runId", async (request, reply) => {
-  const { runId } = request.params as { runId: string };
+app.get("/api/cases/:caseId/package-runs/:runId", async (request, reply) => {
+  const { caseId, runId } = request.params as { caseId: string; runId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
   const row = db
     .prepare(
       `
@@ -3127,9 +3499,11 @@ app.get("/api/package-runs/:runId", async (request, reply) => {
   return { ok: true, run: row };
 });
 
-app.patch("/api/package-runs/:runId", async (request, reply) => {
-  const { runId } = request.params as { runId: string };
+app.patch("/api/cases/:caseId/package-runs/:runId", async (request, reply) => {
+  const { caseId, runId } = request.params as { caseId: string; runId: string };
   const body = request.body as { markdown?: string } | undefined;
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
   if (typeof body?.markdown !== "string") {
     return reply.code(400).send({ ok: false, error: "markdown is required" });
   }
@@ -3146,11 +3520,35 @@ app.patch("/api/package-runs/:runId", async (request, reply) => {
   return { ok: true, run: updated };
 });
 
-app.post("/api/package-runs/:runId/export-docx", async (request, reply) => {
-  const { runId } = request.params as { runId: string };
+app.post("/api/cases/:caseId/package-runs/:runId/approve", async (request, reply) => {
+  const { caseId, runId } = request.params as { caseId: string; runId: string };
+  const body = request.body as { note?: string } | undefined;
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
+  const approvedByHeader = request.headers["x-wc-actor"];
+  const approvedBy = typeof approvedByHeader === "string" && approvedByHeader.trim() ? approvedByHeader.trim() : null;
+  const updated = approvePackageRun(db, {
+    runId,
+    approvedBy,
+    note: body?.note ?? null
+  });
+  if (!updated) {
+    return reply.code(400).send({ ok: false, error: "run not approvable" });
+  }
+  return { ok: true, run: updated };
+});
+
+app.post("/api/cases/:caseId/package-runs/:runId/export-docx", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "package-export-docx")) return;
+  const { caseId, runId } = request.params as { caseId: string; runId: string };
+  if (!assertCaseExists(caseId, reply)) return;
+  if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
   const run = getPackageRun(db, runId);
   if (!run || !run.output_json) {
     return reply.code(404).send({ ok: false, error: "run not found or incomplete" });
+  }
+  if (run.approval_status !== "approved") {
+    return reply.code(409).send({ ok: false, error: "run must be approved before DOCX export" });
   }
   let draft = "";
   try {
@@ -3165,6 +3563,16 @@ app.post("/api/package-runs/:runId/export-docx", async (request, reply) => {
   const filename = `package-run-${runId}.docx`;
   const abs = join(dir, filename);
   await writeFile(abs, buf);
+  db.prepare(
+    `
+      UPDATE package_runs
+      SET latest_export_format = 'docx',
+          latest_export_path = ?,
+          latest_export_bytes = ?,
+          latest_exported_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+  ).run(abs, buf.length, runId);
   return {
     ok: true,
     path: abs,
@@ -3173,7 +3581,7 @@ app.post("/api/package-runs/:runId/export-docx", async (request, reply) => {
   };
 });
 
-const port = Number(process.env.PORT ?? 4000);
+const port = readPortEnv(4000);
 const host = process.env.WC_API_HOST?.trim() || "127.0.0.1";
 
 // ── AI event configs and jobs ──────────────────────────────────────────────────
@@ -3214,14 +3622,15 @@ app.post("/api/cases/:caseId/ai/event-configs", async (request, reply) => {
 });
 
 app.delete("/api/cases/:caseId/ai/event-configs/:configId", async (request, reply) => {
-  const { configId } = request.params as { configId: string };
-  if (!deleteAIEventConfig(db, configId)) {
+  const { caseId, configId } = request.params as { caseId: string; configId: string };
+  if (!deleteAIEventConfig(db, caseId, configId)) {
     return reply.code(404).send({ ok: false, error: "config not found" });
   }
   return { ok: true };
 });
 
 app.post("/api/cases/:caseId/ai/assemble", async (request, reply) => {
+  if (!enforceExpensiveRouteRateLimit(request, reply, "ai-assemble")) return;
   const { caseId } = request.params as { caseId: string };
   const body = request.body as { event_type?: string } | undefined;
   const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId);

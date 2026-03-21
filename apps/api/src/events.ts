@@ -43,10 +43,6 @@ export function writeCaseEvent<TPayload = Record<string, unknown>>(
   const branchInstanceId = input.branchInstanceId ?? fallbackContext?.branch_instance_id ?? null;
   const presetId = input.presetId ?? fallbackContext?.preset_id ?? null;
 
-  if (!branchInstanceId) {
-    return null;
-  }
-
   const event: DomainEvent<TPayload> = {
     event_id: randomUUID(),
     event_name: input.eventName,
@@ -59,22 +55,47 @@ export function writeCaseEvent<TPayload = Record<string, unknown>>(
     payload_json: input.payload
   };
 
-  db.prepare(
-    `
-      INSERT INTO branch_events
-        (id, matter_branch_instance_id, event_type, event_source, source_id, event_time, payload)
-      VALUES
-        (@id, @matter_branch_instance_id, @event_type, @event_source, @source_id, @event_time, @payload)
-    `
-  ).run({
-    id: event.event_id,
-    matter_branch_instance_id: branchInstanceId,
-    event_type: event.event_name,
-    event_source: event.source_type,
-    source_id: event.source_id,
-    event_time: event.occurred_at,
-    payload: JSON.stringify(event)
-  });
+  db.transaction(() => {
+    db.prepare(
+      `
+        INSERT INTO case_events
+          (id, case_id, branch_instance_id, preset_id, event_name, source_type, source_id, occurred_at, payload_json)
+        VALUES
+          (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `
+    ).run(
+      event.event_id,
+      event.case_id,
+      branchInstanceId,
+      presetId,
+      event.event_name,
+      event.source_type,
+      event.source_id,
+      event.occurred_at,
+      JSON.stringify(event)
+    );
+
+    if (!branchInstanceId) {
+      return;
+    }
+
+    db.prepare(
+      `
+        INSERT INTO branch_events
+          (id, matter_branch_instance_id, event_type, event_source, source_id, event_time, payload)
+        VALUES
+          (@id, @matter_branch_instance_id, @event_type, @event_source, @source_id, @event_time, @payload)
+      `
+    ).run({
+      id: event.event_id,
+      matter_branch_instance_id: branchInstanceId,
+      event_type: event.event_name,
+      event_source: event.source_type,
+      source_id: event.source_id,
+      event_time: event.occurred_at,
+      payload: JSON.stringify(event)
+    });
+  })();
 
   return event;
 }

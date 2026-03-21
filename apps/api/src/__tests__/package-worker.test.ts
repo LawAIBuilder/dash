@@ -52,6 +52,39 @@ List all employers in the last five years.
     expect(parsed.draft_markdown).toBe("# Hello");
   });
 
+  it("updatePackageRunDraft refuses to edit approved runs", () => {
+    const db = createTestDb();
+    const caseId = randomUUID();
+    seedCase(db, { caseId, name: "Pkg Approved Test" });
+    const created = createExhibitPacket(db, {
+      caseId,
+      packetName: "Petition",
+      packageType: "claim_petition"
+    });
+    expect(created.ok).toBe(true);
+    const packetId = created.packet?.id;
+    if (!packetId) throw new Error("packet id");
+
+    const runId = randomUUID();
+    db.prepare(
+      `
+      INSERT INTO package_runs (id, packet_id, status, output_json, model, completed_at, approval_status)
+      VALUES (?, ?, 'completed', ?, 'gpt-4o', CURRENT_TIMESTAMP, 'approved')
+    `
+    ).run(
+      runId,
+      packetId,
+      JSON.stringify({
+        draft_markdown: "# Approved",
+        qa_checklist: [],
+        citations: []
+      })
+    );
+
+    const updated = updatePackageRunDraft(db, runId, "# Approved\n\nTampered.");
+    expect(updated).toBeNull();
+  });
+
   it("claim_petition structured output shape can be round-tripped", () => {
     const sample = {
       draft_markdown: "## Cover\n\nx",

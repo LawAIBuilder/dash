@@ -16,6 +16,7 @@ import {
   upsertSyncCursor
 } from "./sync-lifecycle.js";
 import { seedDefaultPackageRulesForCase } from "./seed.js";
+import { isSafeOpaqueId } from "./fs-safety.js";
 
 const HEARING_PREP_KEY = "hearing_prep";
 const MEDICAL_REQUEST_KEY = "medical_request";
@@ -1705,6 +1706,9 @@ function ensureMedicalRequestBranchInstance(db: Database.Database, caseId: strin
 
 export function ensureCaseScaffold(db: Database.Database, input: EnsureCaseScaffoldInput) {
   const caseId = input.caseId ?? randomUUID();
+  if (input.caseId && !isSafeOpaqueId(input.caseId)) {
+    throw new Error("case_id contains unsupported characters");
+  }
   const existing = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
     | { id: string }
     | undefined;

@@ -4,7 +4,7 @@ import { listDocumentTypes } from "@/lib/api-client";
 export function useDocumentTypes() {
   return useQuery({
     queryKey: ["document-types"],
-    queryFn: listDocumentTypes,
+    queryFn: ({ signal }) => listDocumentTypes({ signal }),
     staleTime: 5 * 60_000
   });
 }

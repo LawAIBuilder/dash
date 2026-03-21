@@ -4,12 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
+import { StatePanel } from "@/components/case/StatePanel";
 import { usePeopleTimeline } from "@/hooks/usePeopleTimeline";
 import { formatLabel } from "@/ui/formatters";
 
 export function CasePeoplePage() {
   const { caseId } = useParams();
-  const { people, timeline, refresh, isFetching, isLoading } = usePeopleTimeline(caseId);
+  const { people, timeline, refresh, isFetching, isLoading, error } = usePeopleTimeline(caseId);
 
   if (!caseId) {
     return null;
@@ -17,6 +18,10 @@ export function CasePeoplePage() {
 
   if (isLoading) {
     return <PageSkeleton />;
+  }
+
+  if (error) {
+    return <StatePanel variant="error" message={error} />;
   }
 
   return (
@@ -43,16 +48,15 @@ export function CasePeoplePage() {
             <p className="text-muted-foreground text-sm">No promoted people yet. Sync PracticePanther to populate contacts.</p>
           ) : (
             <div className="divide-y rounded-lg border">
-              {people.map((row) => {
-                const p = row as Record<string, unknown>;
+              {people.map((person) => {
                 return (
-                  <div key={String(p.id)} className="flex flex-wrap items-start justify-between gap-2 px-3 py-2">
+                  <div key={person.id} className="flex flex-wrap items-start justify-between gap-2 px-3 py-2">
                     <div>
-                      <div className="font-medium">{String(p.name ?? "")}</div>
-                      <div className="text-muted-foreground text-xs">{String(p.role ?? "")}</div>
+                      <div className="font-medium">{person.name ?? ""}</div>
+                      <div className="text-muted-foreground text-xs">{person.role ?? ""}</div>
                     </div>
                     <div className="text-muted-foreground max-w-md text-right text-xs">
-                      {[p.email, p.phone].filter(Boolean).join(" · ")}
+                      {[person.email, person.phone].filter(Boolean).join(" · ")}
                     </div>
                   </div>
                 );

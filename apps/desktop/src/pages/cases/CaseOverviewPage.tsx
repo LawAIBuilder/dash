@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { useProjection } from "@/hooks/useProjection";
 import { useCaseActions } from "@/hooks/useCaseActions";
+import { useCaseActivity } from "@/hooks/useCaseActivity";
+import { getDisplayErrorMessage } from "@/lib/api-client";
 import { formatDateTime, formatLabel, summarizeCountRecord } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
 import { StatePanel } from "@/components/case/StatePanel";
@@ -42,6 +44,7 @@ export function CaseOverviewPage() {
   const { caseId } = useParams();
   const { projection, watermark, isLoading, error, refresh } = useProjection(caseId);
   const { syncMutation, normalizeMutation, queueOcrMutation, heuristicMutation } = useCaseActions(caseId);
+  const activityQuery = useCaseActivity(caseId);
   const branchSlice = projection?.slices?.branch_state_slice;
   const issueProofSlice = projection?.slices?.issue_proof_slice;
 
@@ -77,7 +80,7 @@ export function CaseOverviewPage() {
       await refresh();
       return result;
     } catch (actionError) {
-      toast.error(actionError instanceof Error ? actionError.message : `${formatLabel(action)} failed`);
+      toast.error(getDisplayErrorMessage(actionError, `${formatLabel(action)} failed`));
       throw actionError;
     }
   }
@@ -209,7 +212,7 @@ export function CaseOverviewPage() {
           <Card>
             <CardHeader>
               <CardTitle>Recent activity</CardTitle>
-              <CardDescription>Snapshot and projection details kept visible but no longer dominant.</CardDescription>
+              <CardDescription>Projection state plus canonical case events.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2 text-sm">
               <div className="flex items-center justify-between">
@@ -234,6 +237,28 @@ export function CaseOverviewPage() {
                   <div>{branchStatus[branchStatus.length - 1]?.progress_summary ?? "No stage summary available."}</div>
                 </div>
               ) : null}
+              <div className="pt-2">
+                <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">Case events</div>
+                {activityQuery.isLoading ? (
+                  <div className="text-muted-foreground">Loading activity…</div>
+                ) : activityQuery.data?.length ? (
+                  <ul className="space-y-2">
+                    {activityQuery.data.slice(0, 5).map((event) => (
+                      <li key={event.id} className="rounded-lg border bg-background/60 px-3 py-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-medium">{formatLabel(event.event_name)}</span>
+                          <span className="text-xs text-muted-foreground">{formatDateTime(event.occurred_at)}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatLabel(event.source_type)} • {event.source_id}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-muted-foreground">No case events yet.</div>
+                )}
+              </div>
             </CardContent>
           </Card>
         </div>

@@ -34,6 +34,14 @@ function nextExhibitLabel(index: number, namingScheme: string) {
   return out;
 }
 
+function isPdfLikeSource(title: string | null, mimeType: string | null) {
+  const normalizedMime = mimeType?.trim().toLowerCase() ?? "";
+  if (normalizedMime === "application/pdf") {
+    return true;
+  }
+  return /\.pdf$/i.test(title ?? "");
+}
+
 function recordHistory(
   db: Database.Database,
   input: {
@@ -101,6 +109,13 @@ function getPacketRow(db: Database.Database, packetId: string) {
         updated_at: string;
       }
     | undefined;
+}
+
+function sourceItemBelongsToCase(db: Database.Database, sourceItemId: string, caseId: string) {
+  const row = db
+    .prepare(`SELECT id FROM source_items WHERE id = ? AND case_id = ? LIMIT 1`)
+    .get(sourceItemId, caseId) as { id: string } | undefined;
+  return !!row;
 }
 
 function getSectionRows(db: Database.Database, packetId: string) {
@@ -217,6 +232,11 @@ function getExhibitRow(db: Database.Database, exhibitId: string) {
         sort_order: number;
       }
     | undefined;
+}
+
+export function getExhibitCaseId(db: Database.Database, exhibitId: string) {
+  const row = getExhibitRow(db, exhibitId);
+  return row ? { case_id: row.case_id, exhibit_packet_id: row.exhibit_packet_id } : undefined;
 }
 
 function getExhibitItemRows(db: Database.Database, exhibitId: string) {
@@ -351,6 +371,27 @@ export function getSectionCaseId(db: Database.Database, sectionId: string) {
       `
     )
     .get(sectionId) as { case_id: string } | undefined;
+}
+
+export function getExhibitItemCaseId(db: Database.Database, exhibitItemId: string) {
+  return db
+    .prepare(
+      `
+        SELECT ep.case_id, ep.id AS exhibit_packet_id
+        FROM exhibit_items ei
+        JOIN exhibits e ON e.id = ei.exhibit_id
+        JOIN exhibit_sections es ON es.id = e.exhibit_section_id
+        JOIN exhibit_packets ep ON ep.id = es.exhibit_packet_id
+        WHERE ei.id = ?
+        LIMIT 1
+      `
+    )
+    .get(exhibitItemId) as
+    | {
+        case_id: string;
+        exhibit_packet_id: string;
+      }
+    | undefined;
 }
 
 function getResolvedSuggestionIds(db: Database.Database, packetId: string) {
@@ -616,6 +657,14 @@ export function createExhibitPacket(
   const packetMode = input.packetMode ?? "full";
   const namingScheme = input.namingScheme?.trim() || "letters";
   const packageType = input.packageType?.trim() || "hearing_packet";
+  const targetDocumentSourceItemId = input.targetDocumentSourceItemId?.trim() || null;
+
+  if (targetDocumentSourceItemId && !sourceItemBelongsToCase(db, targetDocumentSourceItemId, input.caseId)) {
+    return {
+      ok: false as const,
+      error: "target document source item not found for this case"
+    };
+  }
 
   const existingActive = db
     .prepare(
@@ -653,7 +702,7 @@ export function createExhibitPacket(
       namingScheme,
       packageType,
       input.packageLabel?.trim() ?? null,
-      input.targetDocumentSourceItemId?.trim() ?? null
+      targetDocumentSourceItemId
     );
 
     const sectionIds: string[] = [];
@@ -727,6 +776,16 @@ export function updateExhibitPacket(
       ok: false as const,
       error: "packet not found"
     };
+  }
+
+  if (Object.hasOwn(input, "targetDocumentSourceItemId")) {
+    const targetDocumentSourceItemId = input.targetDocumentSourceItemId?.trim() || null;
+    if (targetDocumentSourceItemId && !sourceItemBelongsToCase(db, targetDocumentSourceItemId, packet.case_id)) {
+      return {
+        ok: false as const,
+        error: "target document source item not found for this case"
+      };
+    }
   }
 
   const updates: string[] = [];
@@ -1135,6 +1194,7 @@ export function addExhibitItem(
           id,
           case_id,
           title,
+          mime_type,
           document_type_id,
           document_type_name,
           raw_json,
@@ -1149,6 +1209,7 @@ export function addExhibitItem(
         id: string;
         case_id: string;
         title: string | null;
+        mime_type: string | null;
         document_type_id: string | null;
         document_type_name: string | null;
         raw_json: string | null;
@@ -1157,6 +1218,13 @@ export function addExhibitItem(
     | undefined;
   if (!sourceItem || sourceItem.case_id !== packet.case_id) {
     return { ok: false as const, error: "source item not found for packet case" };
+  }
+
+  if (packet.package_type === "hearing_packet" && !isPdfLikeSource(sourceItem.title, sourceItem.mime_type)) {
+    return {
+      ok: false as const,
+      error: "hearing packets currently support PDF source items only"
+    };
   }
 
   const duplicate = db

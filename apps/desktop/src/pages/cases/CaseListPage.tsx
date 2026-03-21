@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useCaseList, useCreateCase } from "@/hooks/useCaseList";
+import { getDisplayErrorMessage } from "@/lib/api-client";
 import { formatDateTime, formatLabel } from "@/ui/formatters";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -62,7 +63,7 @@ export function CaseListPage() {
       });
       navigate(`/cases/${created.id}`);
     } catch (createError) {
-      toast.error(createError instanceof Error ? createError.message : "Case creation failed");
+      toast.error(getDisplayErrorMessage(createError, "Case creation failed"));
     }
   }
 
@@ -177,7 +178,7 @@ export function CaseListPage() {
         </CardHeader>
         <CardContent>
           {error ? (
-            <StatePanel variant="error" message={error instanceof Error ? error.message : "Failed to load cases."} />
+            <StatePanel variant="error" message={getDisplayErrorMessage(error, "Failed to load cases.")} />
           ) : null}
 
           {isLoading ? (

@@ -21,6 +21,7 @@ import { PageSkeleton } from "@/components/case/PageSkeleton";
 import { StatePanel } from "@/components/case/StatePanel";
 import { useEffect, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { getDisplayErrorMessage } from "@/lib/api-client";
 
 export function CaseConnectionsPage() {
   const { caseId } = useParams();
@@ -40,6 +41,10 @@ export function CaseConnectionsPage() {
 
   const caseHeader = projection?.slices.case_header ?? null;
   const connection = projection?.slices.source_connection_slice?.connections[0] ?? null;
+  const latestSyncWarning =
+    connection && "latest_sync_warning" in connection
+      ? ((connection as { latest_sync_warning?: string | null }).latest_sync_warning ?? null)
+      : null;
   const ppConnection = ppStatus.data?.connection ?? null;
   const ocrSummary = projection?.slices.document_inventory_slice?.ocr_summary ?? null;
   const queuedPages = ocrSummary?.by_ocr_status?.queued ?? 0;
@@ -101,7 +106,7 @@ export function CaseConnectionsPage() {
       });
       toast.success("Box root folder updated");
     } catch (updateError) {
-      toast.error(updateError instanceof Error ? updateError.message : "Failed to update case");
+      toast.error(getDisplayErrorMessage(updateError, "Failed to update case"));
     }
   }
 
@@ -112,7 +117,7 @@ export function CaseConnectionsPage() {
       });
       toast.success("PracticePanther matter link updated");
     } catch (updateError) {
-      toast.error(updateError instanceof Error ? updateError.message : "Failed to update PP matter");
+      toast.error(getDisplayErrorMessage(updateError, "Failed to update PP matter"));
     }
   }
 
@@ -123,7 +128,7 @@ export function CaseConnectionsPage() {
       });
       window.location.assign(result.authorization_url);
     } catch (authError) {
-      toast.error(authError instanceof Error ? authError.message : "PracticePanther auth start failed");
+      toast.error(getDisplayErrorMessage(authError, "PracticePanther auth start failed"));
     }
   }
 
@@ -134,7 +139,7 @@ export function CaseConnectionsPage() {
       });
       toast.success("PracticePanther sync completed");
     } catch (syncError) {
-      toast.error(syncError instanceof Error ? syncError.message : "PracticePanther sync failed");
+      toast.error(getDisplayErrorMessage(syncError, "PracticePanther sync failed"));
     }
   }
 
@@ -211,6 +216,10 @@ export function CaseConnectionsPage() {
                 {connection.last_error_message ? (
                   <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
                     {connection.last_error_message}
+                  </div>
+                ) : latestSyncWarning ? (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-900 dark:text-amber-100">
+                    Latest sync warning: {latestSyncWarning}
                   </div>
                 ) : null}
 

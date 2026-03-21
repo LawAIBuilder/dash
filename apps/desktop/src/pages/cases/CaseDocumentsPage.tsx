@@ -8,11 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { PdfPreviewDialog } from "@/components/documents/PdfPreviewDialog";
+import { LazyPdfPreviewDialog } from "@/components/documents/LazyPdfPreviewDialog";
 import { useCaseActions } from "@/hooks/useCaseActions";
 import { useDocumentTable } from "@/hooks/useDocumentTable";
 import { useProjection } from "@/hooks/useProjection";
-import { previewFile } from "@/lib/api-client";
+import { getDisplayErrorMessage, previewFile } from "@/lib/api-client";
 import { formatDateTime, formatLabel } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
 import { StatePanel } from "@/components/case/StatePanel";
@@ -46,12 +46,16 @@ export function CaseDocumentsPage() {
   }, [rawRows, searchParams, setSearch, setSearchParams]);
 
   async function openPreview(sourceItemId: string, title: string) {
+    if (!caseId) {
+      toast.error("Case id missing");
+      return;
+    }
     try {
       setPreviewLoadingId(sourceItemId);
-      const blob = await previewFile(sourceItemId);
+      const blob = await previewFile(caseId, sourceItemId);
       setPreview({ title, file: blob, open: true });
     } catch (previewError) {
-      toast.error(previewError instanceof Error ? previewError.message : "Preview failed");
+      toast.error(getDisplayErrorMessage(previewError, "Preview failed"));
     } finally {
       setPreviewLoadingId(null);
     }
@@ -62,7 +66,7 @@ export function CaseDocumentsPage() {
       await queueOcrMutation.mutateAsync(undefined);
       toast.success("OCR jobs queued");
     } catch (queueError) {
-      toast.error(queueError instanceof Error ? queueError.message : "Queue OCR failed");
+      toast.error(getDisplayErrorMessage(queueError, "Queue OCR failed"));
     }
   }
 
@@ -74,7 +78,7 @@ export function CaseDocumentsPage() {
       });
       toast.success("Document OCR re-queued");
     } catch (queueError) {
-      toast.error(queueError instanceof Error ? queueError.message : "Document OCR re-queue failed");
+      toast.error(getDisplayErrorMessage(queueError, "Document OCR re-queue failed"));
     }
   }
 
@@ -180,10 +184,14 @@ export function CaseDocumentsPage() {
                             <Button
                               size="sm"
                               variant="outline"
-                              disabled={previewLoadingId === row.sourceItemId}
+                              disabled={previewLoadingId === row.sourceItemId || !row.previewSupported}
                               onClick={() => void openPreview(row.sourceItemId!, row.title)}
                             >
-                              {previewLoadingId === row.sourceItemId ? "Loading…" : "Preview"}
+                              {previewLoadingId === row.sourceItemId
+                                ? "Loading…"
+                                : row.previewSupported
+                                  ? "Preview PDF"
+                                  : "PDF only"}
                             </Button>
                           ) : (
                             <span className="text-xs text-muted-foreground">No file</span>
@@ -208,11 +216,13 @@ export function CaseDocumentsPage() {
         </CardContent>
       </Card>
 
-      <PdfPreviewDialog
+      <LazyPdfPreviewDialog
         open={preview.open}
         title={preview.title}
         file={preview.file}
-        onOpenChange={(open) => setPreview((current) => ({ ...current, open }))}
+        onOpenChange={(open) =>
+          setPreview((current) => (open ? { ...current, open } : { title: "", file: null, open: false }))
+        }
       />
     </div>
   );

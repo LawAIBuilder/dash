@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { PDFDocument, type PDFFont, type PDFPage, rgb, StandardFonts } from "pdf-lib";
 import { randomUUID } from "node:crypto";
+import { toSafeFilesystemSegment } from "./fs-safety.js";
 
 export const PACKET_PDF_MANIFEST_VERSION = 2 as const;
 
@@ -679,6 +680,32 @@ export function updatePacketExportRow(
   );
 }
 
+export function reconcileStalePacketExports(
+  db: Database.Database,
+  input?: {
+    staleAfterMinutes?: number;
+    errorText?: string;
+  }
+) {
+  const staleAfterMinutes = Math.max(1, Math.floor(input?.staleAfterMinutes ?? 30));
+  const errorText = input?.errorText?.trim() || "Packet PDF export reconciled after incomplete shutdown";
+  const threshold = `-${staleAfterMinutes} minutes`;
+
+  const run = db.prepare(
+    `
+      UPDATE exhibit_packet_exports
+      SET status = 'failed',
+          error_text = COALESCE(NULLIF(error_text, ''), ?),
+          completed_at = CURRENT_TIMESTAMP
+      WHERE status = 'pending'
+        AND completed_at IS NULL
+        AND created_at <= datetime('now', ?)
+    `
+  ).run(errorText, threshold);
+
+  return run.changes;
+}
+
 export function getPacketExportRow(db: Database.Database, exportId: string) {
   return db
     .prepare(
@@ -756,13 +783,14 @@ export async function runPacketPdfExport(
   if (!EXPORTABLE_PACKET_STATUSES.has(packet.status)) {
     return {
       ok: false,
-      error: `packet status must be finalized before export (current: ${packet.status})`
+      error: `packet status must be export-ready (${Array.from(EXPORTABLE_PACKET_STATUSES).join(", ")}; current: ${packet.status})`
     };
   }
 
   const exportId = randomUUID();
   const baseDir = resolveExportBaseDir();
-  const caseDir = join(baseDir, packet.case_id);
+  const caseDirSegment = toSafeFilesystemSegment(packet.case_id, "case");
+  const caseDir = join(baseDir, caseDirSegment);
   await mkdir(caseDir, { recursive: true });
 
   insertPacketExportRow(db, {
@@ -783,7 +811,7 @@ export async function runPacketPdfExport(
   }
 
   const fileBase = `${exportId}.pdf`;
-  const relativePath = join(packet.case_id, fileBase);
+  const relativePath = join(caseDirSegment, fileBase);
   const absPdf = join(baseDir, relativePath);
   await writeFile(absPdf, render.pdf);
 

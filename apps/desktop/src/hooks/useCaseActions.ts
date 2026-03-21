@@ -9,7 +9,10 @@ export function useCaseActions(caseId: string | null | undefined) {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["cases"] }),
       queryClient.invalidateQueries({ queryKey: ["projection", normalizedCaseId] }),
-      queryClient.invalidateQueries({ queryKey: ["review-queue", normalizedCaseId] })
+      queryClient.invalidateQueries({ queryKey: ["review-queue", normalizedCaseId] }),
+      queryClient.invalidateQueries({ queryKey: ["case-activity", normalizedCaseId] }),
+      queryClient.invalidateQueries({ queryKey: ["people-timeline", normalizedCaseId] }),
+      queryClient.invalidateQueries({ queryKey: ["hearing-prep-snapshot", normalizedCaseId] })
     ]);
   };
 

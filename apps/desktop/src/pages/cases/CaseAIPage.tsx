@@ -19,7 +19,7 @@ import {
   useRunAIAssembly,
   useUpsertAIEventConfig
 } from "@/hooks/useAIAssembly";
-import type { AIEventConfig, AIJob } from "@/lib/api-client";
+import { getDisplayErrorMessage, type AIEventConfig, type AIJob } from "@/lib/api-client";
 
 const PRESET_EVENT_TYPES = [
   { value: "239_conference", label: "239 Conference" },
@@ -86,7 +86,7 @@ export function CaseAIPage() {
       setDialogOpen(false);
       toast.success(editingConfig ? "Event config updated" : "Event config created");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save config");
+      toast.error(getDisplayErrorMessage(e, "Failed to save config"));
     }
   }
 
@@ -96,7 +96,7 @@ export function CaseAIPage() {
       await deleteConfig.mutateAsync(configId);
       toast.success("Config deleted");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Delete failed");
+      toast.error(getDisplayErrorMessage(e, "Delete failed"));
     }
   }
 
@@ -110,12 +110,12 @@ export function CaseAIPage() {
         toast.error(job.error_message ?? "AI assembly failed");
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Assembly failed");
+      toast.error(getDisplayErrorMessage(e, "Assembly failed"));
     }
   }
 
   if (configsError) {
-    return <StatePanel variant="error" message={configsError instanceof Error ? configsError.message : "Failed to load AI configs"} />;
+    return <StatePanel variant="error" message={getDisplayErrorMessage(configsError, "Failed to load AI configs")} />;
   }
 
   return (

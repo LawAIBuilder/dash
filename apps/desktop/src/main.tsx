@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router-dom";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@/components/ui/sonner";
+import { isRetryableApiError } from "@/lib/api-client";
 import { router } from "@/router";
 import "./index.css";
 
@@ -11,7 +12,12 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      staleTime: 15_000
+      staleTime: 15_000,
+      retry: (failureCount, error) => failureCount < 1 && isRetryableApiError(error),
+      retryDelay: (attemptIndex, error) => {
+        const baseDelay = error instanceof Error && "status" in error && error.status === 429 ? 1_500 : 750;
+        return Math.min(baseDelay * 2 ** attemptIndex, 5_000);
+      }
     }
   }
 });

@@ -19,12 +19,17 @@ export type DocumentTableRow = {
   sourceKind: string | null;
   classificationMethod: string | null;
   reviewRequired: boolean;
+  previewSupported: boolean;
 };
 
 type SortKey = "title" | "documentType" | "category" | "ocrStatus" | "pageCount" | "updatedAt";
 
 function normalizeValue(value: string | null | undefined) {
   return value?.toLowerCase().trim() ?? "";
+}
+
+function isPdfLikeTitle(title: string | null | undefined) {
+  return /\.pdf$/i.test(title ?? "");
 }
 
 export function useDocumentTable(projection: MatterProjection | null) {
@@ -78,7 +83,8 @@ export function useDocumentTable(projection: MatterProjection | null) {
         sourceItemId: sourceItem?.id ?? document.source_item_id ?? null,
         sourceKind: sourceItem?.source_kind ?? document.source_kind ?? null,
         classificationMethod: sourceItem?.classification_method ?? null,
-        reviewRequired: documentPages.some((page) => page.review_status && page.review_status !== "resolved")
+        reviewRequired: documentPages.some((page) => page.review_status && page.review_status !== "resolved"),
+        previewSupported: isPdfLikeTitle(sourceItem?.title ?? document.title ?? null)
       };
     });
   }, [projection]);

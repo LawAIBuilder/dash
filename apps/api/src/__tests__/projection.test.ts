@@ -33,6 +33,36 @@ describe("buildCaseProjection", () => {
     expect(connection?.snapshot_count).toBe(1);
   });
 
+  it("surfaces latest sync warnings separately from sync failures", () => {
+    const db = createSeededTestDb();
+    openDbs.push(db);
+
+    hydrateBoxInventory(db, {
+      caseId: "case-projection-warning",
+      cursorAfter: "offset-101",
+      files: [{ remote_id: "box-warning-1", filename: "warning doc.pdf" }]
+    });
+
+    const connectionId = db
+      .prepare(`SELECT id FROM source_connections WHERE provider = 'box' ORDER BY created_at ASC LIMIT 1`)
+      .get() as { id: string } | undefined;
+    expect(connectionId?.id).toBeTruthy();
+
+    db.prepare(
+      `
+        UPDATE sync_runs
+        SET warning_message = ?, error_message = NULL
+        WHERE source_connection_id = ?
+      `
+    ).run("Snapshot recorded with warnings", connectionId!.id);
+
+    const projection = buildCaseProjection(db, "case-projection-warning");
+    const connection = projection?.slices.source_connection_slice?.connections[0];
+    expect(connection?.latest_sync_status).toBe("success");
+    expect(connection?.latest_sync_error).toBeNull();
+    expect(connection?.latest_sync_warning).toBe("Snapshot recorded with warnings");
+  });
+
   it("reflects canonical spine OCR state", () => {
     const db = createSeededTestDb();
     openDbs.push(db);

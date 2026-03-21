@@ -25,15 +25,16 @@ export function useProbeBoxJwt(caseId: string | null | undefined) {
 export function useOcrWorkerHealth() {
   return useQuery({
     queryKey: ["ocr-worker-health"],
-    queryFn: getOcrWorkerHealth,
-    refetchInterval: 15_000
+    queryFn: ({ signal }) => getOcrWorkerHealth({ signal }),
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false
   });
 }
 
 export function usePracticePantherStatus() {
   return useQuery({
     queryKey: ["practicepanther-status"],
-    queryFn: getPracticePantherStatus
+    queryFn: ({ signal }) => getPracticePantherStatus({ signal })
   });
 }
 
@@ -41,7 +42,7 @@ export function usePracticePantherMatters(enabled: boolean, searchText?: string)
   return useQuery({
     queryKey: ["practicepanther-matters", searchText?.trim() || ""],
     enabled,
-    queryFn: () => listPracticePantherMatters(searchText)
+    queryFn: ({ signal }) => listPracticePantherMatters(searchText, { signal })
   });
 }
 

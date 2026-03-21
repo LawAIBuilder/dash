@@ -1,16 +1,52 @@
+import { Suspense, lazy, type ReactNode } from "react";
 import { createBrowserRouter, Navigate } from "react-router-dom";
 import { AppShell } from "@/layouts/AppShell";
-import { CaseConnectionsPage } from "@/pages/cases/CaseConnectionsPage";
-import { CaseDocumentsPage } from "@/pages/cases/CaseDocumentsPage";
-import { CaseExhibitsPage } from "@/pages/cases/CaseExhibitsPage";
-import { CaseListPage } from "@/pages/cases/CaseListPage";
-import { CaseOverviewPage } from "@/pages/cases/CaseOverviewPage";
-import { CaseReviewPage } from "@/pages/cases/CaseReviewPage";
-import { CaseTemplatesPage } from "@/pages/cases/CaseTemplatesPage";
-import { CaseAIPage } from "@/pages/cases/CaseAIPage";
-import { CasePackagesPage } from "@/pages/cases/CasePackagesPage";
-import { CasePeoplePage } from "@/pages/cases/CasePeoplePage";
 import { RouteErrorPage } from "@/pages/RouteErrorPage";
+
+const CaseListPage = lazy(() =>
+  import("@/pages/cases/CaseListPage").then((module) => ({ default: module.CaseListPage }))
+);
+const CaseOverviewPage = lazy(() =>
+  import("@/pages/cases/CaseOverviewPage").then((module) => ({ default: module.CaseOverviewPage }))
+);
+const CaseDocumentsPage = lazy(() =>
+  import("@/pages/cases/CaseDocumentsPage").then((module) => ({ default: module.CaseDocumentsPage }))
+);
+const CaseReviewPage = lazy(() =>
+  import("@/pages/cases/CaseReviewPage").then((module) => ({ default: module.CaseReviewPage }))
+);
+const CasePeoplePage = lazy(() =>
+  import("@/pages/cases/CasePeoplePage").then((module) => ({ default: module.CasePeoplePage }))
+);
+const CasePackagesPage = lazy(() =>
+  import("@/pages/cases/CasePackagesPage").then((module) => ({ default: module.CasePackagesPage }))
+);
+const CaseConnectionsPage = lazy(() =>
+  import("@/pages/cases/CaseConnectionsPage").then((module) => ({ default: module.CaseConnectionsPage }))
+);
+const CaseExhibitsPage = lazy(() =>
+  import("@/pages/cases/CaseExhibitsPage").then((module) => ({ default: module.CaseExhibitsPage }))
+);
+const CaseTemplatesPage = lazy(() =>
+  import("@/pages/cases/CaseTemplatesPage").then((module) => ({ default: module.CaseTemplatesPage }))
+);
+const CaseAIPage = lazy(() =>
+  import("@/pages/cases/CaseAIPage").then((module) => ({ default: module.CaseAIPage }))
+);
+
+function withRouteSuspense(element: ReactNode) {
+  return (
+    <Suspense
+      fallback={
+        <div className="rounded-xl border border-border/60 bg-card/80 p-6 text-sm text-muted-foreground shadow-sm">
+          Loading workspace...
+        </div>
+      }
+    >
+      {element}
+    </Suspense>
+  );
+}
 
 export const router = createBrowserRouter([
   {
@@ -24,43 +60,43 @@ export const router = createBrowserRouter([
       },
       {
         path: "cases",
-        element: <CaseListPage />
+        element: withRouteSuspense(<CaseListPage />)
       },
       {
         path: "cases/:caseId",
-        element: <CaseOverviewPage />
+        element: withRouteSuspense(<CaseOverviewPage />)
       },
       {
         path: "cases/:caseId/documents",
-        element: <CaseDocumentsPage />
+        element: withRouteSuspense(<CaseDocumentsPage />)
       },
       {
         path: "cases/:caseId/review",
-        element: <CaseReviewPage />
+        element: withRouteSuspense(<CaseReviewPage />)
       },
       {
         path: "cases/:caseId/people",
-        element: <CasePeoplePage />
+        element: withRouteSuspense(<CasePeoplePage />)
       },
       {
         path: "cases/:caseId/packages",
-        element: <CasePackagesPage />
+        element: withRouteSuspense(<CasePackagesPage />)
       },
       {
         path: "cases/:caseId/connections",
-        element: <CaseConnectionsPage />
+        element: withRouteSuspense(<CaseConnectionsPage />)
       },
       {
         path: "cases/:caseId/exhibits",
-        element: <CaseExhibitsPage />
+        element: withRouteSuspense(<CaseExhibitsPage />)
       },
       {
         path: "cases/:caseId/templates",
-        element: <CaseTemplatesPage />
+        element: withRouteSuspense(<CaseTemplatesPage />)
       },
       {
         path: "cases/:caseId/ai",
-        element: <CaseAIPage />
+        element: withRouteSuspense(<CaseAIPage />)
       }
     ]
   }

@@ -269,4 +269,21 @@ describe("hydrateBoxInventory", () => {
     expect(manifest.partial).toBe(true);
     expect(manifest.error_message).toBe("Box persistence failure");
   });
+
+  it("fails loudly instead of silently re-homing a Box file across cases", () => {
+    const db = createSeededTestDb();
+    openDbs.push(db);
+
+    hydrateBoxInventory(db, {
+      caseId: "case-box-a",
+      files: [{ remote_id: "box-shared", filename: "left knee treatment order.pdf" }]
+    });
+
+    expect(() =>
+      hydrateBoxInventory(db, {
+        caseId: "case-box-b",
+        files: [{ remote_id: "box-shared", filename: "left knee treatment order.pdf" }]
+      })
+    ).toThrow("source item conflict");
+  });
 });

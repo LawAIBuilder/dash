@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { readPositiveIntegerEnv } from "./env.js";
+import { toSafeFilesystemSegment } from "./fs-safety.js";
 import { upsertSourceItemRecord, upsertSourceVersionRecord } from "./source-persistence.js";
 import { normalizeSourceItemDocumentSpine } from "./runtime.js";
 
@@ -38,7 +40,7 @@ export async function persistCaseUploadAndIngest(
     buffer: Buffer;
   }
 ): Promise<PersistCaseUploadResult | { ok: false; error: string }> {
-  const maxBytes = Number(process.env.WC_UPLOAD_MAX_BYTES ?? 45 * 1024 * 1024);
+  const maxBytes = readPositiveIntegerEnv("WC_UPLOAD_MAX_BYTES", 45 * 1024 * 1024, { min: 1 });
   if (input.buffer.length > maxBytes) {
     return { ok: false, error: `file exceeds maximum size (${maxBytes} bytes)` };
   }
@@ -56,7 +58,8 @@ export async function persistCaseUploadAndIngest(
   }
 
   const baseDir = resolveMatterUploadDirectory();
-  const caseDir = join(baseDir, input.caseId);
+  const caseDirSegment = toSafeFilesystemSegment(input.caseId, "case");
+  const caseDir = join(baseDir, caseDirSegment);
   await mkdir(caseDir, { recursive: true });
 
   const safeName = sanitizeFilename(input.filename);
@@ -105,7 +108,7 @@ export async function persistCaseUploadAndIngest(
   return {
     ok: true,
     source_item_id: persisted.id,
-    relative_path: join(input.caseId, `${remoteId}-${safeName}`),
+    relative_path: join(caseDirSegment, `${remoteId}-${safeName}`),
     absolute_path: absolutePath,
     normalization
   };

@@ -11,8 +11,13 @@ export const DEFAULT_MAX_PDF_BYTES = 45 * 1024 * 1024;
  */
 export async function extractPdfPageText(
   buffer: Buffer,
-  pageNumber1Based: number
+  pageNumber1Based: number,
+  options?: { maxPdfBytes?: number }
 ): Promise<string> {
+  const maxBytes = options?.maxPdfBytes ?? DEFAULT_MAX_PDF_BYTES;
+  if (buffer.length > maxBytes) {
+    throw new Error(`PDF larger than ${maxBytes} bytes; increase maxPdfBytes or split the asset`);
+  }
   const doc = await getDocument({ data: new Uint8Array(buffer) }).promise;
   try {
     if (pageNumber1Based < 1 || pageNumber1Based > doc.numPages) {

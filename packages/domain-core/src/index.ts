@@ -262,6 +262,7 @@ export interface ProjectionSourceConnection {
   latest_sync_started_at?: string | null;
   latest_sync_completed_at?: string | null;
   latest_sync_error?: string | null;
+  latest_sync_warning?: string | null;
   snapshot_count?: number | null;
   source_item_count?: number | null;
 }

@@ -3,14 +3,15 @@
  * Runs beside the API, polling the same SQLite DB on an interval.
  */
 import { openDatabase } from "./db.js";
+import { readPositiveIntegerEnv } from "./env.js";
 import { requeueProcessingOcrAttempts, runOcrWorkerLoop } from "./ocr-worker.js";
 import { writeWorkerHeartbeat } from "./worker-health.js";
 
 const db = openDatabase();
 
 const workerName = "ocr";
-const maxPasses = Number(process.env.OCR_WORKER_MAX_PASSES ?? 25);
-const intervalMs = Number(process.env.OCR_WORKER_INTERVAL_MS ?? 15000);
+const maxPasses = readPositiveIntegerEnv("OCR_WORKER_MAX_PASSES", 25, { min: 1 });
+const intervalMs = readPositiveIntegerEnv("OCR_WORKER_INTERVAL_MS", 15_000, { min: 1 });
 
 let stopping = false;
 
@@ -36,10 +37,7 @@ async function main() {
         workerName,
         status: "processing"
       });
-      const { processed } = await runOcrWorkerLoop(
-        db,
-        Number.isFinite(maxPasses) ? maxPasses : 25
-      );
+      const { processed } = await runOcrWorkerLoop(db, maxPasses);
       writeWorkerHeartbeat(db, {
         workerName,
         status: "idle",
@@ -60,7 +58,7 @@ async function main() {
     }
 
     if (!stopping) {
-      await sleep(Number.isFinite(intervalMs) ? intervalMs : 15000);
+      await sleep(intervalMs);
     }
   }
 

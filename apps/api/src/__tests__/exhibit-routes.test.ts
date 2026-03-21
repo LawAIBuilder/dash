@@ -78,7 +78,7 @@ describe("exhibit workspace routes", () => {
 
     const createSlotRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-sections/${employeeSection!.id}/exhibits`,
+      url: `/api/cases/${caseId}/exhibit-sections/${employeeSection!.id}/exhibits`,
       payload: { title: "Medical Records" }
     });
     expect(createSlotRes.statusCode).toBe(200);
@@ -94,7 +94,7 @@ describe("exhibit workspace routes", () => {
 
     const addItemRes = await app.inject({
       method: "POST",
-      url: `/api/exhibits/${slotId}/items`,
+      url: `/api/cases/${caseId}/exhibits/${slotId}/items`,
       payload: { source_item_id: sourceItem!.id }
     });
     expect(addItemRes.statusCode).toBe(200);
@@ -116,14 +116,14 @@ describe("exhibit workspace routes", () => {
 
     const pageRulesRes = await app.inject({
       method: "PATCH",
-      url: `/api/exhibit-items/${item.id}/page-rules`,
+      url: `/api/cases/${caseId}/exhibit-items/${item.id}/page-rules`,
       payload: { exclude_canonical_page_ids: [page!.id] }
     });
     expect(pageRulesRes.statusCode).toBe(200);
 
     const suggestionsRes = await app.inject({
       method: "GET",
-      url: `/api/exhibit-packets/${packet.id}/suggestions`
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/suggestions`
     });
     expect(suggestionsRes.statusCode).toBe(200);
     const suggestions = suggestionsRes.json<{ suggestions: Array<{ id: string }> }>().suggestions;
@@ -131,7 +131,7 @@ describe("exhibit workspace routes", () => {
 
     const finalizeRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-packets/${packet.id}/finalize`,
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/finalize`,
       payload: {}
     });
     expect(finalizeRes.statusCode).toBe(200);
@@ -159,7 +159,7 @@ describe("exhibit workspace routes", () => {
     const employeeSection = packet.sections.find((section) => section.section_key === "employee")!;
     const createSlotRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-sections/${employeeSection.id}/exhibits`,
+      url: `/api/cases/${caseId}/exhibit-sections/${employeeSection.id}/exhibits`,
       payload: { title: "Medical Records" }
     });
     expect(createSlotRes.statusCode).toBe(200);
@@ -174,14 +174,14 @@ describe("exhibit workspace routes", () => {
 
     const addItemRes = await app.inject({
       method: "POST",
-      url: `/api/exhibits/${slotId}/items`,
+      url: `/api/cases/${caseId}/exhibits/${slotId}/items`,
       payload: { source_item_id: sourceItem.id }
     });
     expect(addItemRes.statusCode).toBe(200);
 
     const finalizeRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-packets/${packet.id}/finalize`,
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/finalize`,
       payload: {}
     });
     expect(finalizeRes.statusCode).toBe(200);
@@ -213,11 +213,50 @@ describe("exhibit workspace routes", () => {
 
     const exportRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-packets/${packetId}/exports/packet-pdf`,
+      url: `/api/cases/${caseId}/exhibit-packets/${packetId}/exports/packet-pdf`,
       payload: {}
     });
     expect(exportRes.statusCode).toBe(400);
-    expect(exportRes.json<{ ok: false; error: string }>().error).toContain("finalized");
+    expect(exportRes.json<{ ok: false; error: string }>().error).toContain("export-ready");
+  });
+
+  it("rejects target document source items that belong to another case", async () => {
+    const { caseId } = await createNormalizedCase("Packet Target Matter", "target-doc-1");
+    const { caseId: otherCaseId } = await createNormalizedCase("Packet Other Target Matter", "target-doc-2");
+
+    const otherSourceItem = db
+      .prepare(`SELECT id FROM source_items WHERE case_id = ? LIMIT 1`)
+      .get(otherCaseId) as { id: string } | undefined;
+    expect(otherSourceItem?.id).toBeTruthy();
+
+    const createPacketRes = await app.inject({
+      method: "POST",
+      url: `/api/cases/${caseId}/exhibit-packets`,
+      payload: {
+        packet_name: "Targeted Packet",
+        target_document_source_item_id: otherSourceItem!.id
+      }
+    });
+    expect(createPacketRes.statusCode).toBe(400);
+    expect(createPacketRes.json<{ ok: false; error: string }>().error).toContain("target document source item");
+
+    const validPacketRes = await app.inject({
+      method: "POST",
+      url: `/api/cases/${caseId}/exhibit-packets`,
+      payload: { packet_name: "Valid Target Packet" }
+    });
+    expect(validPacketRes.statusCode).toBe(200);
+    const packetId = validPacketRes.json<{ packet: { id: string } }>().packet.id;
+
+    const updatePacketRes = await app.inject({
+      method: "PATCH",
+      url: `/api/cases/${caseId}/exhibit-packets/${packetId}`,
+      payload: {
+        target_document_source_item_id: otherSourceItem!.id
+      }
+    });
+    expect(updatePacketRes.statusCode).toBe(400);
+    expect(updatePacketRes.json<{ ok: false; error: string }>().error).toContain("target document source item");
   });
 
   it("rejects a second active packet for the same case", async () => {
@@ -256,7 +295,7 @@ describe("exhibit workspace routes", () => {
 
     const duplicateSectionRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-packets/${packet.id}/sections`,
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/sections`,
       payload: { section_key: "employee", section_label: "Duplicate Employee" }
     });
     expect(duplicateSectionRes.statusCode).toBe(400);
@@ -265,7 +304,7 @@ describe("exhibit workspace routes", () => {
 
     const addSectionRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-packets/${packet.id}/sections`,
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/sections`,
       payload: { section_key: "other", section_label: "Other Exhibits" }
     });
     expect(addSectionRes.statusCode).toBe(200);
@@ -277,7 +316,7 @@ describe("exhibit workspace routes", () => {
 
     const otherSlotRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-sections/${otherSection.id}/exhibits`,
+      url: `/api/cases/${caseId}/exhibit-sections/${otherSection.id}/exhibits`,
       payload: { title: "Other Slot" }
     });
     const otherSlotId = otherSlotRes.json<{
@@ -290,14 +329,14 @@ describe("exhibit workspace routes", () => {
 
     const firstAssign = await app.inject({
       method: "POST",
-      url: `/api/exhibits/${employeeSlotId}/items`,
+      url: `/api/cases/${caseId}/exhibits/${employeeSlotId}/items`,
       payload: { source_item_id: sourceItem.id }
     });
     expect(firstAssign.statusCode).toBe(200);
 
     const duplicateAssign = await app.inject({
       method: "POST",
-      url: `/api/exhibits/${otherSlotId}/items`,
+      url: `/api/cases/${caseId}/exhibits/${otherSlotId}/items`,
       payload: { source_item_id: sourceItem.id }
     });
     expect(duplicateAssign.statusCode).toBe(400);
@@ -317,7 +356,7 @@ describe("exhibit workspace routes", () => {
 
     const addSec1 = await app.inject({
       method: "POST",
-      url: `/api/exhibit-packets/${packet.id}/sections`,
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/sections`,
       payload: { section_key: "employer", section_label: "Employer Exhibits" }
     });
     expect(addSec1.statusCode).toBe(200);
@@ -327,7 +366,7 @@ describe("exhibit workspace routes", () => {
 
     const sectionReorderRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-packets/${packet.id}/sections/reorder`,
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/sections/reorder`,
       payload: { section_ids: [employerSection.id, employeeSection.id] }
     });
     expect(sectionReorderRes.statusCode).toBe(200);
@@ -343,7 +382,7 @@ describe("exhibit workspace routes", () => {
 
     const exhibitReorderRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-sections/${employeeSection.id}/exhibits/reorder`,
+      url: `/api/cases/${caseId}/exhibit-sections/${employeeSection.id}/exhibits/reorder`,
       payload: { exhibit_ids: [starterExhibits[1]!.id, starterExhibits[0]!.id, ...starterExhibits.slice(2).map((e) => e.id)] }
     });
     expect(exhibitReorderRes.statusCode).toBe(200);
@@ -400,7 +439,7 @@ describe("exhibit workspace routes", () => {
 
     const slotRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-sections/${employeeSection.id}/exhibits`,
+      url: `/api/cases/${caseId}/exhibit-sections/${employeeSection.id}/exhibits`,
       payload: { title: "Paged Slot" }
     });
     const slotId = slotRes.json<{
@@ -412,7 +451,7 @@ describe("exhibit workspace routes", () => {
       .get(caseId) as { id: string };
     const addItemRes = await app.inject({
       method: "POST",
-      url: `/api/exhibits/${slotId}/items`,
+      url: `/api/cases/${caseId}/exhibits/${slotId}/items`,
       payload: { source_item_id: sourceItem.id }
     });
     const addedItem = addItemRes.json<{
@@ -433,7 +472,7 @@ describe("exhibit workspace routes", () => {
 
     await app.inject({
       method: "PATCH",
-      url: `/api/exhibit-items/${itemId}/page-rules`,
+      url: `/api/cases/${caseId}/exhibit-items/${itemId}/page-rules`,
       payload: { exclude_canonical_page_ids: [pageIds[0]!] }
     });
 
@@ -471,7 +510,7 @@ describe("exhibit workspace routes", () => {
 
     const suggestionsRes = await app.inject({
       method: "GET",
-      url: `/api/exhibit-packets/${packet.id}/suggestions`
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/suggestions`
     });
     expect(suggestionsRes.statusCode).toBe(200);
     const suggestions = suggestionsRes.json<{ suggestions: Array<{ id: string }> }>().suggestions;
@@ -479,21 +518,21 @@ describe("exhibit workspace routes", () => {
 
     const resolveRes = await app.inject({
       method: "POST",
-      url: `/api/exhibit-packets/${packet.id}/suggestions/${encodeURIComponent(suggestions[0]!.id)}/resolve`,
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/suggestions/${encodeURIComponent(suggestions[0]!.id)}/resolve`,
       payload: { action: "dismiss" }
     });
     expect(resolveRes.statusCode).toBe(200);
 
     const suggestionsAfter = await app.inject({
       method: "GET",
-      url: `/api/exhibit-packets/${packet.id}/suggestions`
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/suggestions`
     });
     const nextSuggestions = suggestionsAfter.json<{ suggestions: Array<{ id: string }> }>().suggestions;
     expect(nextSuggestions.some((row) => row.id === suggestions[0]!.id)).toBe(false);
 
     const historyRes = await app.inject({
       method: "GET",
-      url: `/api/exhibit-packets/${packet.id}/history`
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/history`
     });
     expect(historyRes.statusCode).toBe(200);
     expect(historyRes.json<{ history: Array<{ action_type: string }> }>().history.some((row) => row.action_type === "suggestion_resolved")).toBe(true);

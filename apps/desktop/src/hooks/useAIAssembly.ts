@@ -11,7 +11,7 @@ import {
 export function useAIStatus() {
   return useQuery({
     queryKey: ["ai-status"],
-    queryFn: getAIStatus
+    queryFn: ({ signal }) => getAIStatus({ signal })
   });
 }
 
@@ -19,7 +19,7 @@ export function useAIEventConfigs(caseId: string | null | undefined) {
   const normalizedCaseId = caseId?.trim() || "";
   return useQuery({
     queryKey: ["ai-event-configs", normalizedCaseId],
-    queryFn: () => listAIEventConfigs(normalizedCaseId),
+    queryFn: ({ signal }) => listAIEventConfigs(normalizedCaseId, { signal }),
     enabled: normalizedCaseId.length > 0
   });
 }
@@ -28,7 +28,7 @@ export function useAIJobs(caseId: string | null | undefined) {
   const normalizedCaseId = caseId?.trim() || "";
   return useQuery({
     queryKey: ["ai-jobs", normalizedCaseId],
-    queryFn: () => listAIJobs(normalizedCaseId),
+    queryFn: ({ signal }) => listAIJobs(normalizedCaseId, { signal }),
     enabled: normalizedCaseId.length > 0
   });
 }

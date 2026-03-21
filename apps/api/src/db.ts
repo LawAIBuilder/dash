@@ -31,7 +31,8 @@ function assertRuntimeCompatibility(db: Database.Database) {
       "last_error_message",
       "updated_at"
     ],
-    canonical_pages: ["ocr_status", "extraction_status", "updated_at"]
+    canonical_pages: ["ocr_status", "extraction_status", "updated_at"],
+    sync_runs: ["warning_message"]
   };
 
   const missingByTable = Object.entries(requiredColumns)
@@ -93,6 +94,7 @@ export function openDatabase(dbPath?: string): Database.Database {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  db.pragma("busy_timeout = 5000");
   applyAuthoritativeMigrations(db);
   assertRuntimeCompatibility(db);
   return db;

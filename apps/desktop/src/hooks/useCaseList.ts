@@ -5,7 +5,7 @@ import type { CreateCaseInput } from "@/types/cases";
 export function useCaseList() {
   return useQuery({
     queryKey: ["cases"],
-    queryFn: listCases
+    queryFn: ({ signal }) => listCases({ signal })
   });
 }
 

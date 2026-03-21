@@ -37,6 +37,12 @@ export function AppShell() {
 
   return (
     <div className="min-h-screen bg-[var(--workbench-paper)] text-foreground">
+      <a
+        href="#main-content"
+        className="sr-only fixed left-4 top-4 z-50 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow focus:not-sr-only"
+      >
+        Skip to main content
+      </a>
       <div className="grid min-h-screen lg:grid-cols-[280px_1fr]">
         <aside className="workbench-sidebar border-r border-border/80 bg-card/90 backdrop-blur">
           <div className="flex h-full flex-col p-4">
@@ -133,7 +139,7 @@ export function AppShell() {
             </div>
           </header>
 
-          <main className="flex-1 p-6">
+          <main id="main-content" className="flex-1 p-6">
             <Outlet />
           </main>
         </div>

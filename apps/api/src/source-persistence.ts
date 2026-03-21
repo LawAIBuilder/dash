@@ -44,7 +44,7 @@ export function upsertSourceItemRecord(
   const existing = db
     .prepare(
       `
-        SELECT id, raw_json
+        SELECT id, case_id, raw_json
         FROM source_items
         WHERE provider = ? AND remote_id = ?
         LIMIT 1
@@ -53,9 +53,16 @@ export function upsertSourceItemRecord(
     .get(input.provider, input.remoteId) as
     | {
         id: string;
+        case_id: string | null;
         raw_json: string | null;
       }
     | undefined;
+
+  if (existing?.case_id && existing.case_id !== input.caseId) {
+    throw new Error(
+      `source item conflict: ${input.provider}:${input.remoteId} is already linked to case ${existing.case_id}`
+    );
+  }
 
   const id = existing?.id ?? randomUUID();
   const mergedRawJson = {
@@ -229,13 +236,24 @@ export function persistPracticePantherEntity(
   const existingRaw = db
     .prepare(
       `
-        SELECT id
+        SELECT id, case_id
         FROM pp_entities_raw
         WHERE entity_type = ? AND pp_entity_id = ?
         LIMIT 1
       `
     )
-    .get(entity.entity_type, entity.pp_entity_id) as { id: string } | undefined;
+    .get(entity.entity_type, entity.pp_entity_id) as
+    | {
+        id: string;
+        case_id: string | null;
+      }
+    | undefined;
+
+  if (existingRaw?.case_id && existingRaw.case_id !== input.caseId) {
+    throw new Error(
+      `PracticePanther entity conflict: ${entity.entity_type}:${entity.pp_entity_id} is already linked to case ${existingRaw.case_id}`
+    );
+  }
 
   const rawPayload = entity.raw_json ?? {};
   db.prepare(
@@ -312,15 +330,21 @@ export function persistPracticePantherEntity(
     const existingValue = db
       .prepare(
         `
-          SELECT id
+          SELECT id, case_id
           FROM pp_custom_field_values
           WHERE entity_type = ? AND entity_remote_id = ? AND pp_field_id = ?
           LIMIT 1
         `
       )
       .get(entity.entity_type, entity.pp_entity_id, customField.pp_field_id) as
-      | { id: string }
+      | { id: string; case_id: string | null }
       | undefined;
+
+    if (existingValue?.case_id && existingValue.case_id !== input.caseId) {
+      throw new Error(
+        `PracticePanther custom field conflict: ${entity.entity_type}:${entity.pp_entity_id}:${customField.pp_field_id} is already linked to case ${existingValue.case_id}`
+      );
+    }
 
     db.prepare(
       `

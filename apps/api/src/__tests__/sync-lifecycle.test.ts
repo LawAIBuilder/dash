@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { runTrackedSourceSync, startSyncRun } from "../sync-lifecycle.js";
-import { createTestDb, seedCase, seedSourceConnection } from "./test-helpers.js";
+import { reconcileStaleSyncRuns, runTrackedSourceSync, startSyncRun } from "../sync-lifecycle.js";
+import { createTestDb, createThrowingJsonValue, seedCase, seedSourceConnection } from "./test-helpers.js";
 
 describe("runTrackedSourceSync", () => {
   const openDbs: Array<{ close: () => void }> = [];
@@ -68,18 +68,20 @@ describe("runTrackedSourceSync", () => {
     });
 
     const syncRun = db
-      .prepare(`SELECT status, cursor_after, error_message, completed_at FROM sync_runs WHERE id = ? LIMIT 1`)
+      .prepare(`SELECT status, cursor_after, error_message, warning_message, completed_at FROM sync_runs WHERE id = ? LIMIT 1`)
       .get(syncRunId) as
       | {
           status: string;
           cursor_after: string | null;
           error_message: string | null;
+          warning_message: string | null;
           completed_at: string | null;
         }
       | undefined;
     expect(syncRun?.status).toBe("success");
     expect(syncRun?.cursor_after).toBe("cursor-after");
     expect(syncRun?.error_message).toBeNull();
+    expect(syncRun?.warning_message).toBeNull();
     expect(syncRun?.completed_at).not.toBeNull();
 
     const connection = db
@@ -156,17 +158,19 @@ describe("runTrackedSourceSync", () => {
     ).toThrow("Simulated PP sync failure");
 
     const syncRun = db
-      .prepare(`SELECT status, cursor_after, error_message FROM sync_runs WHERE id = ? LIMIT 1`)
+      .prepare(`SELECT status, cursor_after, error_message, warning_message FROM sync_runs WHERE id = ? LIMIT 1`)
       .get(syncRunId) as
       | {
           status: string;
           cursor_after: string | null;
           error_message: string | null;
+          warning_message: string | null;
         }
       | undefined;
     expect(syncRun?.status).toBe("failed");
     expect(syncRun?.cursor_after).toBeNull();
     expect(syncRun?.error_message).toBe("Simulated PP sync failure");
+    expect(syncRun?.warning_message).toBeNull();
 
     const connection = db
       .prepare(`SELECT status, last_error_message FROM source_connections WHERE id = ? LIMIT 1`)
@@ -236,15 +240,17 @@ describe("runTrackedSourceSync", () => {
     ).toThrow("Primary sync failure");
 
     const syncRun = db
-      .prepare(`SELECT status, error_message FROM sync_runs WHERE id = ? LIMIT 1`)
+      .prepare(`SELECT status, error_message, warning_message FROM sync_runs WHERE id = ? LIMIT 1`)
       .get(syncRunId) as
       | {
           status: string;
           error_message: string | null;
+          warning_message: string | null;
         }
       | undefined;
     expect(syncRun?.status).toBe("failed");
     expect(syncRun?.error_message).toBe("Primary sync failure");
+    expect(syncRun?.warning_message).toBeNull();
 
     const connection = db
       .prepare(`SELECT status, last_error_message FROM source_connections WHERE id = ? LIMIT 1`)
@@ -261,5 +267,136 @@ describe("runTrackedSourceSync", () => {
       .prepare(`SELECT COUNT(*) AS count FROM source_snapshots`)
       .get() as { count: number };
     expect(snapshotCount.count).toBe(0);
+  });
+
+  it("keeps success status when only success snapshot persistence fails", () => {
+    const db = createTestDb();
+    openDbs.push(db);
+    const caseId = seedCase(db, {
+      caseId: "case-sync-snapshot-warning",
+      name: "Sync Snapshot Warning Matter"
+    });
+    const connectionId = seedSourceConnection(db, {
+      connectionId: "conn-sync-snapshot-warning",
+      provider: "box",
+      accountLabel: "Test Box"
+    });
+    const syncRunId = startSyncRun(db, {
+      sourceConnectionId: connectionId,
+      caseId,
+      syncType: "box_inventory",
+      cursorBefore: "cursor-before"
+    });
+
+    const outcome = runTrackedSourceSync({
+      db,
+      sourceConnectionId: connectionId,
+      caseId,
+      syncRunId,
+      snapshotType: "box_inventory",
+      sourceType: "box",
+      cursorAfter: "cursor-after",
+      run: () => ({
+        processedCount: 1
+      }),
+      buildSuccessManifest: () => ({
+        item_count: 1,
+        bad_payload: createThrowingJsonValue("success snapshot serialization failed")
+      }),
+      buildFailureManifest: () => ({
+        partial: true
+      })
+    });
+
+    expect(outcome.result).toEqual({ processedCount: 1 });
+    expect(outcome.snapshotId).toBeNull();
+    expect(outcome.warnings).toEqual([
+      expect.stringContaining("snapshot_record_failed: success snapshot serialization failed")
+    ]);
+
+    const syncRun = db
+      .prepare(`SELECT status, cursor_after, error_message, warning_message FROM sync_runs WHERE id = ? LIMIT 1`)
+      .get(syncRunId) as
+      | {
+          status: string;
+          cursor_after: string | null;
+          error_message: string | null;
+          warning_message: string | null;
+        }
+      | undefined;
+    expect(syncRun?.status).toBe("success");
+    expect(syncRun?.cursor_after).toBe("cursor-after");
+    expect(syncRun?.error_message).toBeNull();
+    expect(syncRun?.warning_message).toContain("snapshot_record_failed");
+
+    const connection = db
+      .prepare(`SELECT status, last_error_message FROM source_connections WHERE id = ? LIMIT 1`)
+      .get(connectionId) as
+      | {
+          status: string;
+          last_error_message: string | null;
+        }
+      | undefined;
+    expect(connection?.status).toBe("active");
+    expect(connection?.last_error_message).toBeNull();
+
+    const snapshotCount = db
+      .prepare(`SELECT COUNT(*) AS count FROM source_snapshots`)
+      .get() as { count: number };
+    expect(snapshotCount.count).toBe(0);
+  });
+
+  it("reconciles stale running sync rows and marks syncing connectors errored", () => {
+    const db = createTestDb();
+    openDbs.push(db);
+    const caseId = seedCase(db, {
+      caseId: "case-sync-stale",
+      name: "Stale Sync Matter"
+    });
+    const connectionId = seedSourceConnection(db, {
+      connectionId: "conn-sync-stale",
+      provider: "box",
+      accountLabel: "Test Box",
+      status: "syncing"
+    });
+
+    db.prepare(
+      `
+        INSERT INTO sync_runs (id, source_connection_id, case_id, sync_type, status, started_at)
+        VALUES (?, ?, ?, 'box_inventory', 'running', datetime('now', '-90 minutes'))
+      `
+    ).run("sync-run-stale-1", connectionId, caseId);
+
+    const reconciled = reconcileStaleSyncRuns(db, {
+      staleAfterMinutes: 30,
+      errorMessage: "Recovered stale sync run"
+    });
+    expect(reconciled).toBe(1);
+
+    const syncRun = db
+      .prepare(`SELECT status, error_message, warning_message, completed_at FROM sync_runs WHERE id = ? LIMIT 1`)
+      .get("sync-run-stale-1") as
+      | {
+          status: string;
+          error_message: string | null;
+          warning_message: string | null;
+          completed_at: string | null;
+        }
+      | undefined;
+    expect(syncRun?.status).toBe("failed");
+    expect(syncRun?.error_message).toBe("Recovered stale sync run");
+    expect(syncRun?.warning_message).toBeNull();
+    expect(syncRun?.completed_at).not.toBeNull();
+
+    const connection = db
+      .prepare(`SELECT status, last_error_message FROM source_connections WHERE id = ? LIMIT 1`)
+      .get(connectionId) as
+      | {
+          status: string;
+          last_error_message: string | null;
+        }
+      | undefined;
+    expect(connection?.status).toBe("error");
+    expect(connection?.last_error_message).toBe("Recovered stale sync run");
   });
 });

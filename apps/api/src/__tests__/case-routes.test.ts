@@ -180,7 +180,7 @@ describe("case and review routes", () => {
 
     const classifyRes = await app.inject({
       method: "PATCH",
-      url: `/api/source-items/${sourceItem!.id}/classification`,
+      url: `/api/cases/${created.case.id}/source-items/${sourceItem!.id}/classification`,
       payload: { document_type_id: documentType!.id }
     });
     expect(classifyRes.statusCode).toBe(200);
@@ -202,5 +202,132 @@ describe("case and review routes", () => {
       document_type_name: "Treatment Order",
       classification_method: "manual_override"
     });
+  });
+
+  it("rejects classification and OCR review mutations when the source page belongs to another case", async () => {
+    const owner = await app.inject({
+      method: "POST",
+      url: "/api/cases",
+      payload: { name: "Owner Review Matter" }
+    });
+    const ownerCaseId = owner.json<{ case: { id: string } }>().case.id;
+
+    const other = await app.inject({
+      method: "POST",
+      url: "/api/cases",
+      payload: { name: "Wrong Review Matter" }
+    });
+    const otherCaseId = other.json<{ case: { id: string } }>().case.id;
+
+    const hydrateRes = await app.inject({
+      method: "POST",
+      url: "/api/connectors/box/development/hydrate",
+      payload: {
+        case_id: ownerCaseId,
+        files: [{ remote_id: "route-box-ownership-1", filename: "empty scan.pdf" }]
+      }
+    });
+    expect(hydrateRes.statusCode).toBe(200);
+
+    const normalizeRes = await app.inject({
+      method: "POST",
+      url: `/api/cases/${ownerCaseId}/normalize-documents`,
+      payload: {}
+    });
+    expect(normalizeRes.statusCode).toBe(200);
+
+    const sourceItem = db
+      .prepare(`SELECT id FROM source_items WHERE case_id = ? LIMIT 1`)
+      .get(ownerCaseId) as { id: string } | undefined;
+    expect(sourceItem?.id).toBeTruthy();
+
+    const canonicalPage = db
+      .prepare(
+        `
+          SELECT cp.id
+          FROM canonical_pages cp
+          JOIN canonical_documents cd ON cd.id = cp.canonical_doc_id
+          WHERE cd.case_id = ?
+          LIMIT 1
+        `
+      )
+      .get(ownerCaseId) as { id: string } | undefined;
+    expect(canonicalPage?.id).toBeTruthy();
+
+    const documentType = db
+      .prepare(`SELECT id FROM document_types WHERE canonical_name = 'Treatment Order' LIMIT 1`)
+      .get() as { id: string } | undefined;
+    expect(documentType?.id).toBeTruthy();
+
+    const wrongClassifyRes = await app.inject({
+      method: "PATCH",
+      url: `/api/cases/${otherCaseId}/source-items/${sourceItem!.id}/classification`,
+      payload: { document_type_id: documentType!.id }
+    });
+    expect(wrongClassifyRes.statusCode).toBe(404);
+
+    const wrongReviewRes = await app.inject({
+      method: "POST",
+      url: `/api/cases/${otherCaseId}/canonical-pages/${canonicalPage!.id}/ocr-review/resolve`,
+      payload: { accept_empty: true }
+    });
+    expect(wrongReviewRes.statusCode).toBe(404);
+
+    const correctReviewRes = await app.inject({
+      method: "POST",
+      url: `/api/cases/${ownerCaseId}/canonical-pages/${canonicalPage!.id}/ocr-review/resolve`,
+      payload: { accept_empty: true }
+    });
+    expect(correctReviewRes.statusCode).toBe(200);
+    expect(correctReviewRes.json<{ ok: true; canonical_page_id: string }>().canonical_page_id).toBe(canonicalPage!.id);
+  });
+
+  it("deletes golden examples only within the requested case", async () => {
+    const owner = await app.inject({
+      method: "POST",
+      url: "/api/cases",
+      payload: { name: "Golden Owner Matter" }
+    });
+    const ownerCaseId = owner.json<{ case: { id: string } }>().case.id;
+
+    const other = await app.inject({
+      method: "POST",
+      url: "/api/cases",
+      payload: { name: "Golden Wrong Matter" }
+    });
+    const otherCaseId = other.json<{ case: { id: string } }>().case.id;
+
+    const createExampleRes = await app.inject({
+      method: "POST",
+      url: `/api/cases/${ownerCaseId}/golden-examples`,
+      payload: {
+        package_type: "hearing_packet",
+        label: "Golden Example"
+      }
+    });
+    expect(createExampleRes.statusCode).toBe(200);
+    const exampleId = createExampleRes.json<{ golden_example: { id: string } }>().golden_example.id;
+
+    const wrongDeleteRes = await app.inject({
+      method: "DELETE",
+      url: `/api/cases/${otherCaseId}/golden-examples/${exampleId}`
+    });
+    expect(wrongDeleteRes.statusCode).toBe(404);
+
+    const stillExists = db
+      .prepare(`SELECT id FROM golden_examples WHERE id = ? LIMIT 1`)
+      .get(exampleId) as { id: string } | undefined;
+    expect(stillExists?.id).toBe(exampleId);
+
+    const correctDeleteRes = await app.inject({
+      method: "DELETE",
+      url: `/api/cases/${ownerCaseId}/golden-examples/${exampleId}`
+    });
+    expect(correctDeleteRes.statusCode).toBe(200);
+
+    const deleted = db
+      .prepare(`SELECT id FROM golden_examples WHERE id = ? LIMIT 1`)
+      .get(exampleId) as { id: string } | undefined;
+    expect(deleted).toBeUndefined();
   });
 });

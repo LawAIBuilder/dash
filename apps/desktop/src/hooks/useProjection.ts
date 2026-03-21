@@ -23,7 +23,7 @@ export function useProjection(caseId: string | null | undefined) {
   const query = useQuery<MatterProjection>({
     queryKey: ["projection", normalizedCaseId],
     enabled: normalizedCaseId.length > 0,
-    queryFn: () => getProjection(normalizedCaseId),
+    queryFn: ({ signal }) => getProjection(normalizedCaseId, { signal }),
     initialData: cachedMatter?.projection
   });
 

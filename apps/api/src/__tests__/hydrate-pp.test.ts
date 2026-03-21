@@ -336,4 +336,39 @@ describe("hydratePracticePantherState", () => {
     expect(manifest.partial).toBe(true);
     expect(manifest.error_message).toBe("PP persistence failure");
   });
+
+  it("fails loudly instead of silently re-homing a PP entity across cases", () => {
+    const db = createSeededTestDb();
+    openDbs.push(db);
+
+    hydratePracticePantherState(db, {
+      caseId: "case-pp-a",
+      entities: [
+        {
+          entity_type: "matter",
+          pp_entity_id: "pp-shared",
+          raw_json: {
+            name: "Smith v. Acme",
+            pp_matter_id: "pp-shared"
+          }
+        }
+      ]
+    });
+
+    expect(() =>
+      hydratePracticePantherState(db, {
+        caseId: "case-pp-b",
+        entities: [
+          {
+            entity_type: "matter",
+            pp_entity_id: "pp-shared",
+            raw_json: {
+              name: "Jones v. Beta",
+              pp_matter_id: "pp-shared"
+            }
+          }
+        ]
+      })
+    ).toThrow("PracticePanther entity conflict");
+  });
 });

@@ -14,7 +14,7 @@ export function useDocumentTemplates(caseId: string | null | undefined) {
   return useQuery({
     queryKey: ["document-templates", normalizedCaseId],
     enabled: normalizedCaseId.length > 0,
-    queryFn: () => listDocumentTemplates(normalizedCaseId)
+    queryFn: ({ signal }) => listDocumentTemplates(normalizedCaseId, { signal })
   });
 }
 
@@ -24,7 +24,7 @@ export function useDocumentTemplateFills(caseId: string | null | undefined, temp
   return useQuery({
     queryKey: ["document-template-fills", normalizedCaseId, normalizedTemplateId || "all"],
     enabled: normalizedCaseId.length > 0,
-    queryFn: () => listDocumentTemplateFills(normalizedCaseId, normalizedTemplateId || undefined)
+    queryFn: ({ signal }) => listDocumentTemplateFills(normalizedCaseId, normalizedTemplateId || undefined, { signal })
   });
 }
 

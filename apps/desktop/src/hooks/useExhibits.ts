@@ -24,25 +24,27 @@ export function useExhibitWorkspace(caseId: string | null | undefined) {
   return useQuery({
     queryKey: ["exhibits", normalizedCaseId],
     enabled: normalizedCaseId.length > 0,
-    queryFn: () => getExhibitWorkspace(normalizedCaseId)
+    queryFn: ({ signal }) => getExhibitWorkspace(normalizedCaseId, { signal })
   });
 }
 
-export function useExhibitSuggestions(packetId: string | null | undefined) {
+export function useExhibitSuggestions(caseId: string | null | undefined, packetId: string | null | undefined) {
+  const normalizedCaseId = caseId?.trim() || "";
   const normalizedPacketId = packetId?.trim() || "";
   return useQuery({
-    queryKey: ["exhibit-suggestions", normalizedPacketId],
-    enabled: normalizedPacketId.length > 0,
-    queryFn: () => getExhibitSuggestions(normalizedPacketId)
+    queryKey: ["exhibit-suggestions", normalizedCaseId, normalizedPacketId],
+    enabled: normalizedCaseId.length > 0 && normalizedPacketId.length > 0,
+    queryFn: ({ signal }) => getExhibitSuggestions(normalizedCaseId, normalizedPacketId, { signal })
   });
 }
 
-export function useExhibitHistory(packetId: string | null | undefined) {
+export function useExhibitHistory(caseId: string | null | undefined, packetId: string | null | undefined) {
+  const normalizedCaseId = caseId?.trim() || "";
   const normalizedPacketId = packetId?.trim() || "";
   return useQuery({
-    queryKey: ["exhibit-history", normalizedPacketId],
-    enabled: normalizedPacketId.length > 0,
-    queryFn: () => getExhibitHistory(normalizedPacketId)
+    queryKey: ["exhibit-history", normalizedCaseId, normalizedPacketId],
+    enabled: normalizedCaseId.length > 0 && normalizedPacketId.length > 0,
+    queryFn: ({ signal }) => getExhibitHistory(normalizedCaseId, normalizedPacketId, { signal })
   });
 }
 
@@ -54,11 +56,12 @@ function useExhibitInvalidation(caseId: string | null | undefined) {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["exhibits", normalizedCaseId] }),
       queryClient.invalidateQueries({ queryKey: ["projection", normalizedCaseId] }),
+      queryClient.invalidateQueries({ queryKey: ["hearing-prep-snapshot", normalizedCaseId] }),
       normalizedPacketId
         ? Promise.all([
-            queryClient.invalidateQueries({ queryKey: ["exhibit-suggestions", normalizedPacketId] }),
-            queryClient.invalidateQueries({ queryKey: ["exhibit-history", normalizedPacketId] }),
-            queryClient.invalidateQueries({ queryKey: ["packet-exports", normalizedPacketId] })
+            queryClient.invalidateQueries({ queryKey: ["exhibit-suggestions", normalizedCaseId, normalizedPacketId] }),
+            queryClient.invalidateQueries({ queryKey: ["exhibit-history", normalizedCaseId, normalizedPacketId] }),
+            queryClient.invalidateQueries({ queryKey: ["packet-exports", normalizedCaseId, normalizedPacketId] })
           ])
         : Promise.resolve()
     ]);
@@ -84,20 +87,31 @@ export function useCreateExhibitPacket(caseId: string | null | undefined) {
 
 export function useUpdateExhibitPacket(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({
       packetId,
       input
     }: {
       packetId: string;
-      input: { packet_name?: string; packet_mode?: "compact" | "full"; naming_scheme?: string; status?: string };
-    }) => updateExhibitPacket(packetId, input),
+      input: {
+        packet_name?: string;
+        packet_mode?: "compact" | "full";
+        naming_scheme?: string;
+        status?: string;
+        package_type?: string;
+        package_label?: string | null;
+        target_document_source_item_id?: string | null;
+        run_status?: string | null;
+      };
+    }) => updateExhibitPacket(normalizedCaseId, packetId, input),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
 
 export function useCreateExhibitSlot(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({
       sectionId,
@@ -111,31 +125,34 @@ export function useCreateExhibitSlot(caseId: string | null | undefined) {
         objection_risk?: string | null;
         notes?: string | null;
       };
-    }) => createExhibitSlot(sectionId, input),
+    }) => createExhibitSlot(normalizedCaseId, sectionId, input),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
 
 export function useReorderExhibitSections(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({ packetId, sectionIds }: { packetId: string; sectionIds: string[] }) =>
-      reorderExhibitSections(packetId, sectionIds),
+      reorderExhibitSections(normalizedCaseId, packetId, sectionIds),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
 
 export function useReorderSectionExhibits(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({ sectionId, exhibitIds }: { sectionId: string; exhibitIds: string[] }) =>
-      reorderSectionExhibits(sectionId, exhibitIds),
+      reorderSectionExhibits(normalizedCaseId, sectionId, exhibitIds),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
 
 export function useUpdateExhibitSlot(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({
       exhibitId,
@@ -150,13 +167,14 @@ export function useUpdateExhibitSlot(caseId: string | null | undefined) {
         objection_risk?: string | null;
         notes?: string | null;
       };
-    }) => updateExhibitSlot(exhibitId, input),
+    }) => updateExhibitSlot(normalizedCaseId, exhibitId, input),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
 
 export function useAddExhibitItem(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({
       exhibitId,
@@ -164,21 +182,23 @@ export function useAddExhibitItem(caseId: string | null | undefined) {
     }: {
       exhibitId: string;
       sourceItemId: string;
-    }) => addExhibitItem(exhibitId, { source_item_id: sourceItemId }),
+    }) => addExhibitItem(normalizedCaseId, exhibitId, { source_item_id: sourceItemId }),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
 
 export function useRemoveExhibitItem(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
-    mutationFn: (itemId: string) => removeExhibitItem(itemId),
+    mutationFn: (itemId: string) => removeExhibitItem(normalizedCaseId, itemId),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
 
 export function useUpdateExhibitItemPageRules(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({
       itemId,
@@ -186,21 +206,23 @@ export function useUpdateExhibitItemPageRules(caseId: string | null | undefined)
     }: {
       itemId: string;
       excludeCanonicalPageIds: string[];
-    }) => updateExhibitItemPageRules(itemId, excludeCanonicalPageIds),
+    }) => updateExhibitItemPageRules(normalizedCaseId, itemId, excludeCanonicalPageIds),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
 
 export function useFinalizeExhibitPacket(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
-    mutationFn: (packetId: string) => finalizeExhibitPacket(packetId),
+    mutationFn: (packetId: string) => finalizeExhibitPacket(normalizedCaseId, packetId),
     onSuccess: async (result) => invalidate(result.packet?.id ?? null)
   });
 }
 
 export function useResolveExhibitSuggestion(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({
       packetId,
@@ -212,25 +234,27 @@ export function useResolveExhibitSuggestion(caseId: string | null | undefined) {
       suggestionId: string;
       action: "accept" | "dismiss";
       note?: string | null;
-    }) => resolveExhibitSuggestion(packetId, suggestionId, { action, note }),
+    }) => resolveExhibitSuggestion(normalizedCaseId, packetId, suggestionId, { action, note }),
     onSuccess: async (result, variables) => invalidate(result.packet?.id ?? variables.packetId)
   });
 }
 
-export function usePacketPdfExports(packetId: string | null | undefined) {
+export function usePacketPdfExports(caseId: string | null | undefined, packetId: string | null | undefined) {
+  const normalizedCaseId = caseId?.trim() || "";
   const normalizedPacketId = packetId?.trim() || "";
   return useQuery({
-    queryKey: ["packet-exports", normalizedPacketId],
-    enabled: normalizedPacketId.length > 0,
-    queryFn: () => listPacketPdfExports(normalizedPacketId)
+    queryKey: ["packet-exports", normalizedCaseId, normalizedPacketId],
+    enabled: normalizedCaseId.length > 0 && normalizedPacketId.length > 0,
+    queryFn: ({ signal }) => listPacketPdfExports(normalizedCaseId, normalizedPacketId, { signal })
   });
 }
 
 export function useGeneratePacketPdf(caseId: string | null | undefined) {
   const invalidate = useExhibitInvalidation(caseId);
+  const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({ packetId, layout }: { packetId: string; layout?: PacketPdfExportLayout }) =>
-      generatePacketPdf(packetId, layout),
+      generatePacketPdf(normalizedCaseId, packetId, layout),
     onSuccess: async (_result, variables) => invalidate(variables.packetId)
   });
 }

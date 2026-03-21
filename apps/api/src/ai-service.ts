@@ -2,6 +2,8 @@ import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
 import { buildPackageBundle, DEFAULT_MAX_RETRIEVAL_CHARS, gatherDocumentSummaries } from "./retrieval.js";
+import { buildCaseProjection } from "./projection.js";
+import { getPacketPreview } from "./exhibits.js";
 
 const DEFAULT_MODEL = "gpt-4o";
 
@@ -88,8 +90,10 @@ export function upsertAIEventConfig(
   return getAIEventConfig(db, id)!;
 }
 
-export function deleteAIEventConfig(db: Database.Database, configId: string): boolean {
-  return db.prepare(`DELETE FROM ai_event_configs WHERE id = ?`).run(configId).changes > 0;
+export function deleteAIEventConfig(db: Database.Database, caseId: string, configId: string): boolean {
+  return (
+    db.prepare(`DELETE FROM ai_event_configs WHERE id = ? AND case_id = ?`).run(configId, caseId).changes > 0
+  );
 }
 
 export interface AIJob {
@@ -223,6 +227,10 @@ export interface PackageRunRow {
   id: string;
   packet_id: string;
   status: string;
+  approval_status: string | null;
+  approved_at: string | null;
+  approved_by: string | null;
+  approval_note: string | null;
   input_json: string | null;
   output_json: string | null;
   citations_json: string | null;
@@ -233,6 +241,10 @@ export interface PackageRunRow {
   retrieval_warnings_json: string | null;
   started_at: string | null;
   completed_at: string | null;
+  latest_export_format: string | null;
+  latest_export_path: string | null;
+  latest_export_bytes: number | null;
+  latest_exported_at: string | null;
   created_at: string;
 }
 
@@ -265,6 +277,30 @@ export function parseInterrogatoryRequests(text: string): string[] {
 }
 
 function packetWorkerSystemPrompt(packageType: string): string {
+  if (packageType === "hearing_packet") {
+    return `You are a Minnesota workers' compensation hearing-prep assistant. Use ONLY the retrieval bundle JSON and hearing packet context supplied by the user. Do not invent facts, dates, judges, exhibits, missing proof, or witness roles.
+
+Output a single JSON object with keys:
+- case_profile (object): hearing context, requested relief summary, major risks.
+- issue_matrix (array of objects): one row per issue with defense gap, support level, and what proof answers it.
+- fact_timeline (array of objects): dated or sequenced facts tied to sources.
+- exhibit_catalog (array of objects): proposed exhibit list with why offered and issue proved.
+- witness_matrix (array of objects): people/witnesses, what they prove, and risks.
+- deadlines_and_requirements (object): deadlines, required filings, unresolved compliance items.
+- read_coverage_log (object): what appears covered vs what still needs verification from the file.
+- open_questions (array of objects): contradictions, missing proof, OCR/review gaps, legal calls.
+- proof_to_relief_graph (array of objects): requested relief, legal elements, supporting proof, and remaining gaps.
+- hearing_readiness_checklist (array of { check_id, label, status: "pass"|"fail"|"warn", detail }): operational and proof readiness checks.
+- draft_markdown (string): a hearing-prep memo / argument-ready narrative summary.
+- citations (array of { claim, source_item_id, canonical_page_id, page_text_excerpt }): cite every material factual assertion.
+- qa_checklist (array of { check_id, label, status: "pass"|"fail"|"warn", detail }): package-level QA.
+
+Rules:
+- Be explicit when a field is uncertain.
+- Put uncertainty in open_questions and checklist warnings instead of guessing.
+- Prefer compact, issue-driven outputs over bloated summaries.
+- Ground exhibit and witness choices in the actual packet context and retrieved matter evidence.`;
+  }
   if (packageType === "claim_petition") {
     return `You are a Minnesota workers' compensation paralegal/attorney assistant. The Workers' Compensation Court of Appeals (WCCA) and Office of Administrative Hearings (OAH) filing context applies. Draft ONLY from the retrieval bundle JSON (case_summary, document_summaries, full_documents, pp_context, package_rules). Do not invent facts, dates, providers, or docket numbers.
 
@@ -295,7 +331,7 @@ Mark weakly supported answers with qa_checklist status "warn".`;
 
 export function updatePackageRunDraft(db: Database.Database, runId: string, editedMarkdown: string): PackageRunRow | null {
   const run = getPackageRun(db, runId);
-  if (!run || run.status !== "completed" || !run.output_json) {
+  if (!run || run.status !== "completed" || !run.output_json || run.approval_status === "approved") {
     return null;
   }
   let obj: Record<string, unknown>;
@@ -307,6 +343,27 @@ export function updatePackageRunDraft(db: Database.Database, runId: string, edit
   obj.edited_draft_markdown = editedMarkdown;
   db.prepare(`UPDATE package_runs SET output_json = ? WHERE id = ?`).run(JSON.stringify(obj), runId);
   return getPackageRun(db, runId);
+}
+
+export function approvePackageRun(
+  db: Database.Database,
+  input: { runId: string; approvedBy?: string | null; note?: string | null }
+): PackageRunRow | null {
+  const run = getPackageRun(db, input.runId);
+  if (!run || run.status !== "completed" || !run.output_json) {
+    return null;
+  }
+  db.prepare(
+    `
+      UPDATE package_runs
+      SET approval_status = 'approved',
+          approved_at = CURRENT_TIMESTAMP,
+          approved_by = ?,
+          approval_note = ?
+      WHERE id = ?
+    `
+  ).run(input.approvedBy ?? null, input.note?.trim() || null, input.runId);
+  return getPackageRun(db, input.runId);
 }
 
 export async function runPackageWorker(
@@ -385,9 +442,25 @@ export async function runPackageWorker(
     const parsed = parseInterrogatoryRequests(joined);
     discoveryAux = `\n\nParsed interrogatory/request segments (${parsed.length} segments, heuristic): ${JSON.stringify(parsed.slice(0, 200))}`;
   }
+  let hearingAux = "";
+  if (packet.package_type === "hearing_packet") {
+    const projection = buildCaseProjection(db, input.caseId);
+    const packetPreview = getPacketPreview(db, input.packetId);
+    const hearingContext = {
+      packet_preview: packetPreview,
+      branch_instances: projection?.slices.branch_state_slice?.branch_instances ?? [],
+      proof_requirements: projection?.slices.issue_proof_slice?.proof_requirements ?? [],
+      people: projection?.slices.case_people_slice?.people ?? [],
+      timeline: (projection?.slices.case_timeline_slice?.entries ?? []).slice(0, 40)
+    };
+    hearingAux = `\n\nHearing packet context (JSON):\n${JSON.stringify(hearingContext).slice(
+      0,
+      Math.min(JSON.stringify(hearingContext).length, Math.floor(DEFAULT_MAX_RETRIEVAL_CHARS / 2))
+    )}`;
+  }
   const userPrompt = `Package: ${packet.packet_name} (${packet.package_type})
 ${packet.package_label ? `Label: ${packet.package_label}\n` : ""}
-Retrieval bundle (JSON):\n${bundleJson.slice(0, Math.min(bundleJson.length, DEFAULT_MAX_RETRIEVAL_CHARS))}${discoveryAux}`;
+Retrieval bundle (JSON):\n${bundleJson.slice(0, Math.min(bundleJson.length, DEFAULT_MAX_RETRIEVAL_CHARS))}${discoveryAux}${hearingAux}`;
 
   db.prepare(
     `INSERT INTO package_runs (id, packet_id, status, input_json, model, started_at, retrieval_warnings_json)

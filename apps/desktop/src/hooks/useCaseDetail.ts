@@ -7,7 +7,7 @@ export function useCaseDetail(caseId: string | null | undefined) {
   return useQuery({
     queryKey: ["case", normalizedCaseId],
     enabled: normalizedCaseId.length > 0,
-    queryFn: () => getCase(normalizedCaseId)
+    queryFn: ({ signal }) => getCase(normalizedCaseId, { signal })
   });
 }
 

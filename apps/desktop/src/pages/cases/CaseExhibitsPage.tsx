@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { AlertTriangle, ArrowDown, ArrowUp, ChevronDown, ChevronRight, Download, FileJson, FolderOpen, Plus, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -260,6 +260,7 @@ function ExhibitSlotCard({
 
 export function CaseExhibitsPage() {
   const { caseId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { projection, isLoading: projectionLoading, error: projectionError } = useProjection(caseId);
   const workspace = useExhibitWorkspace(caseId);
   const createPacket = useCreateExhibitPacket(caseId);
@@ -274,10 +275,15 @@ export function CaseExhibitsPage() {
   const reorderSections = useReorderExhibitSections(caseId);
   const reorderExhibits = useReorderSectionExhibits(caseId);
 
-  const packet = workspace.data?.[0] ?? null;
-  const suggestions = useExhibitSuggestions(packet?.id);
-  const history = useExhibitHistory(packet?.id);
-  const packetExports = usePacketPdfExports(packet?.id);
+  const packets = workspace.data ?? [];
+  const selectedPacketId = searchParams.get("packetId")?.trim() || "";
+  const packet = useMemo(
+    () => packets.find((candidate) => candidate.id === selectedPacketId) ?? packets[0] ?? null,
+    [packets, selectedPacketId]
+  );
+  const suggestions = useExhibitSuggestions(caseId, packet?.id);
+  const history = useExhibitHistory(caseId, packet?.id);
+  const packetExports = usePacketPdfExports(caseId, packet?.id);
 
   const [slotDialogOpen, setSlotDialogOpen] = useState(false);
   const [slotDialogSectionId, setSlotDialogSectionId] = useState<string | null>(null);
@@ -485,9 +491,13 @@ export function CaseExhibitsPage() {
   }
 
   async function handleDownloadExport(exportId: string) {
+    if (!caseId) {
+      toast.error("Case context missing for export download");
+      return;
+    }
     setDownloadingExportId(exportId);
     try {
-      const blob = await downloadPacketExportPdf(exportId);
+      const blob = await downloadPacketExportPdf(caseId, exportId);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
@@ -634,12 +644,38 @@ export function CaseExhibitsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap items-center justify-between gap-4">
-              <Tabs value={packet.packet_mode} onValueChange={handleModeChange}>
-                <TabsList>
-                  <TabsTrigger value="compact">Compact</TabsTrigger>
-                  <TabsTrigger value="full">Full workspace</TabsTrigger>
-                </TabsList>
-              </Tabs>
+              <div className="flex flex-wrap items-center gap-4">
+                {packets.length > 1 ? (
+                  <div className="min-w-[240px] space-y-1">
+                    <div className="text-xs text-muted-foreground">Active packet</div>
+                    <Select
+                      value={packet.id}
+                      onValueChange={(value) => {
+                        const next = new URLSearchParams(searchParams);
+                        next.set("packetId", value);
+                        setSearchParams(next, { replace: true });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select packet" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {packets.map((candidate) => (
+                          <SelectItem key={candidate.id} value={candidate.id}>
+                            {candidate.packet_name} ({formatLabel(candidate.package_type ?? "hearing_packet")})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+                <Tabs value={packet.packet_mode} onValueChange={handleModeChange}>
+                  <TabsList>
+                    <TabsTrigger value="compact">Compact</TabsTrigger>
+                    <TabsTrigger value="full">Full workspace</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </div>
               <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
                 <span>{packet.sections.length} sections</span>
                 <span>•</span>

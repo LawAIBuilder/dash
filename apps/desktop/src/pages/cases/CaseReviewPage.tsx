@@ -6,13 +6,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { PdfPreviewDialog } from "@/components/documents/PdfPreviewDialog";
-import { previewFile } from "@/lib/api-client";
+import { LazyPdfPreviewDialog } from "@/components/documents/LazyPdfPreviewDialog";
+import { getDisplayErrorMessage, previewFile } from "@/lib/api-client";
 import { useDocumentTypes } from "@/hooks/useDocumentTypes";
 import { useOverrideClassification, useResolveOcrReview, useReviewQueue } from "@/hooks/useReviewQueue";
 import { formatDateTime, formatLabel, truncateMiddle } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
 import { StatePanel } from "@/components/case/StatePanel";
+
+function isPdfLikeTitle(title: string | null | undefined) {
+  return /\.pdf$/i.test(title ?? "");
+}
 
 export function CaseReviewPage() {
   const { caseId } = useParams();
@@ -37,16 +41,20 @@ export function CaseReviewPage() {
   );
 
   async function openPreview(sourceItemId: string, title: string) {
+    if (!caseId) {
+      toast.error("Case id missing");
+      return;
+    }
     try {
-      const blob = await previewFile(sourceItemId);
+      const blob = await previewFile(caseId, sourceItemId);
       setPreview({ title, file: blob, open: true });
     } catch (previewError) {
-      toast.error(previewError instanceof Error ? previewError.message : "Preview failed");
+      toast.error(getDisplayErrorMessage(previewError, "Preview failed"));
     }
   }
 
   if (error) {
-    return <StatePanel variant="error" message={error instanceof Error ? error.message : "Review queue failed to load."} />;
+    return <StatePanel variant="error" message={getDisplayErrorMessage(error, "Review queue failed to load.")} />;
   }
 
   return (
@@ -125,8 +133,17 @@ export function CaseReviewPage() {
                   </div>
                   <div className="flex flex-col gap-2">
                     {item.source_item_id ? (
-                      <Button variant="outline" onClick={() => void openPreview(item.source_item_id!, item.source_item_title ?? item.canonical_document_title ?? "Preview")}>
-                        Preview file
+                      <Button
+                        variant="outline"
+                        disabled={!isPdfLikeTitle(item.source_item_title ?? item.canonical_document_title)}
+                        onClick={() =>
+                          void openPreview(
+                            item.source_item_id!,
+                            item.source_item_title ?? item.canonical_document_title ?? "Preview"
+                          )
+                        }
+                      >
+                        {isPdfLikeTitle(item.source_item_title ?? item.canonical_document_title) ? "Preview PDF" : "PDF only"}
                       </Button>
                     ) : null}
                     <Button
@@ -135,7 +152,7 @@ export function CaseReviewPage() {
                           .mutateAsync({ pageId: item.canonical_page_id, acceptEmpty: false })
                           .then(() => toast.success("Review resolved"))
                           .catch((resolveError) =>
-                            toast.error(resolveError instanceof Error ? resolveError.message : "Resolve review failed")
+                            toast.error(getDisplayErrorMessage(resolveError, "Resolve review failed"))
                           )
                       }
                     >
@@ -148,7 +165,7 @@ export function CaseReviewPage() {
                           .mutateAsync({ pageId: item.canonical_page_id, acceptEmpty: true })
                           .then(() => toast.success("Review resolved (empty accepted)"))
                           .catch((resolveError) =>
-                            toast.error(resolveError instanceof Error ? resolveError.message : "Resolve review failed")
+                            toast.error(getDisplayErrorMessage(resolveError, "Resolve review failed"))
                           )
                       }
                     >
@@ -210,11 +227,7 @@ export function CaseReviewPage() {
                         })
                         .then(() => toast.success("Classification updated"))
                         .catch((classificationError) =>
-                          toast.error(
-                            classificationError instanceof Error
-                              ? classificationError.message
-                              : "Classification update failed"
-                          )
+                          toast.error(getDisplayErrorMessage(classificationError, "Classification update failed"))
                         )
                     }
                   >
@@ -227,11 +240,7 @@ export function CaseReviewPage() {
                         .mutateAsync({ sourceItemId: item.source_item_id, documentTypeId: null })
                         .then(() => toast.success("Classification cleared"))
                         .catch((classificationError) =>
-                          toast.error(
-                            classificationError instanceof Error
-                              ? classificationError.message
-                              : "Classification clear failed"
-                          )
+                          toast.error(getDisplayErrorMessage(classificationError, "Classification clear failed"))
                         )
                     }
                   >
@@ -268,11 +277,13 @@ export function CaseReviewPage() {
         </CardContent>
       </Card>
 
-      <PdfPreviewDialog
+      <LazyPdfPreviewDialog
         open={preview.open}
         title={preview.title}
         file={preview.file}
-        onOpenChange={(open) => setPreview((current) => ({ ...current, open }))}
+        onOpenChange={(open) =>
+          setPreview((current) => (open ? { ...current, open } : { title: "", file: null, open: false }))
+        }
       />
     </div>
   );

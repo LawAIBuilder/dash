@@ -173,6 +173,7 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
           latest_sync.started_at AS latest_sync_started_at,
           latest_sync.completed_at AS latest_sync_completed_at,
           latest_sync.error_message AS latest_sync_error,
+          latest_sync.warning_message AS latest_sync_warning,
           COALESCE(snapshot_counts.snapshot_count, 0) AS snapshot_count,
           COALESCE(source_item_counts.source_item_count, 0) AS source_item_count
         FROM source_connections sc
@@ -239,6 +240,7 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
     latest_sync_started_at: string | null;
     latest_sync_completed_at: string | null;
     latest_sync_error: string | null;
+    latest_sync_warning: string | null;
     snapshot_count: number;
     source_item_count: number;
   }>;
@@ -428,7 +430,7 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
   const syncEvents = db
     .prepare(
       `
-        SELECT id, sync_type, status, started_at, completed_at, error_message
+        SELECT id, sync_type, status, started_at, completed_at, error_message, warning_message
         FROM sync_runs
         WHERE case_id = ?
         ORDER BY COALESCE(completed_at, started_at) DESC
@@ -464,7 +466,11 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
       id: String(row.id),
       kind: "sync",
       label: String(row.sync_type ?? "sync"),
-      detail: row.error_message ? String(row.error_message) : String(row.status ?? ""),
+      detail: row.error_message
+        ? String(row.error_message)
+        : row.warning_message
+          ? String(row.warning_message)
+          : String(row.status ?? ""),
       occurred_at: (row.completed_at as string | null) ?? (row.started_at as string | null) ?? null,
       payload: row as Record<string, unknown>
     });
@@ -663,6 +669,7 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
       latest_sync_status: connection.latest_sync_status,
       latest_sync_started_at: connection.latest_sync_started_at,
       latest_sync_completed_at: connection.latest_sync_completed_at,
+      latest_sync_warning: connection.latest_sync_warning,
       snapshot_count: connection.snapshot_count,
       source_item_count: connection.source_item_count
     })),

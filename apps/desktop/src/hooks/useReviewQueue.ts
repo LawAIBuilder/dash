@@ -6,7 +6,7 @@ export function useReviewQueue(caseId: string | null | undefined) {
   return useQuery({
     queryKey: ["review-queue", normalizedCaseId],
     enabled: normalizedCaseId.length > 0,
-    queryFn: () => getReviewQueue(normalizedCaseId)
+    queryFn: ({ signal }) => getReviewQueue(normalizedCaseId, { signal })
   });
 }
 
@@ -15,7 +15,7 @@ export function useResolveOcrReview(caseId: string | null | undefined) {
   const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({ pageId, acceptEmpty }: { pageId: string; acceptEmpty?: boolean }) =>
-      resolveOcrReview(pageId, acceptEmpty),
+      resolveOcrReview(normalizedCaseId, pageId, acceptEmpty),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["review-queue", normalizedCaseId] }),
@@ -30,7 +30,7 @@ export function useOverrideClassification(caseId: string | null | undefined) {
   const normalizedCaseId = caseId?.trim() || "";
   return useMutation({
     mutationFn: ({ sourceItemId, documentTypeId }: { sourceItemId: string; documentTypeId: string | null }) =>
-      overrideClassification(sourceItemId, documentTypeId),
+      overrideClassification(normalizedCaseId, sourceItemId, documentTypeId),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["review-queue", normalizedCaseId] }),

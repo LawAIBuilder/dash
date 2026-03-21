@@ -1101,5 +1101,62 @@ export const authoritativeMigrations: AuthoritativeMigration[] = [
         CREATE INDEX IF NOT EXISTS idx_package_runs_status ON package_runs(status);
       `);
     }
+  },
+  {
+    id: "0018_case_events",
+    description: "Case-level event log with optional branch linkage",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS case_events (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+          branch_instance_id TEXT REFERENCES matter_branch_instances(id) ON DELETE SET NULL,
+          preset_id TEXT REFERENCES product_presets(id) ON DELETE SET NULL,
+          event_name TEXT NOT NULL,
+          source_type TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          occurred_at TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_case_events_case_time ON case_events(case_id, occurred_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_case_events_branch_time ON case_events(branch_instance_id, occurred_at DESC);
+      `);
+    }
+  },
+  {
+    id: "0019_package_run_approvals",
+    description: "Approval metadata for package runs before export/write-back",
+    up(db) {
+      addColumnIfMissing(db, "package_runs", "approval_status", "approval_status TEXT NOT NULL DEFAULT 'pending'");
+      addColumnIfMissing(db, "package_runs", "approved_at", "approved_at TEXT");
+      addColumnIfMissing(db, "package_runs", "approved_by", "approved_by TEXT");
+      addColumnIfMissing(db, "package_runs", "approval_note", "approval_note TEXT");
+      db.exec(`
+        UPDATE package_runs
+        SET approval_status = COALESCE(NULLIF(approval_status, ''), 'pending')
+        WHERE approval_status IS NULL OR approval_status = '';
+      `);
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_package_runs_approval_status ON package_runs(approval_status);
+      `);
+    }
+  },
+  {
+    id: "0020_package_run_export_metadata",
+    description: "Track latest exported artifact metadata for package runs",
+    up(db) {
+      addColumnIfMissing(db, "package_runs", "latest_export_format", "latest_export_format TEXT");
+      addColumnIfMissing(db, "package_runs", "latest_export_path", "latest_export_path TEXT");
+      addColumnIfMissing(db, "package_runs", "latest_export_bytes", "latest_export_bytes INTEGER");
+      addColumnIfMissing(db, "package_runs", "latest_exported_at", "latest_exported_at TEXT");
+    }
+  },
+  {
+    id: "0021_sync_run_warnings",
+    description: "Track sync warnings separately from sync failures",
+    up(db) {
+      addColumnIfMissing(db, "sync_runs", "warning_message", "warning_message TEXT");
+    }
   }
 ];

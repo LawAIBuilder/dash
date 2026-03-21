@@ -1,6 +1,10 @@
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { readPortEnv } from "./env.js";
+
 const DEFAULT_PP_API_BASE_URL = "https://app.practicepanther.com";
 const PP_AUTHORIZE_PATH = "/oauth/authorize";
 const PP_TOKEN_PATH = "/oauth/token";
+const SOURCE_CONNECTION_SECRET_ENV = "WC_SOURCE_CONNECTION_SECRET";
 
 export const PRACTICE_PANTHER_SYNC_DEFERRED_MESSAGE =
   "PracticePanther OAuth and production sync require PP_CLIENT_ID, PP_CLIENT_SECRET, and a registered redirect URI.";
@@ -14,11 +18,10 @@ export interface PracticePantherEnvConfig {
 
 export function readPracticePantherConfig(env: Record<string, string | undefined> = process.env): PracticePantherEnvConfig {
   const publicDomain = env.RAILWAY_PUBLIC_DOMAIN?.trim() || env.RAILWAY_STATIC_URL?.trim() || null;
+  const localPort = readPortEnv(4000, env);
   const fallbackRedirectUri = publicDomain
     ? `https://${publicDomain}/api/connectors/practicepanther/callback`
-    : env.PORT
-      ? `http://127.0.0.1:${env.PORT}/api/connectors/practicepanther/callback`
-      : "http://127.0.0.1:4000/api/connectors/practicepanther/callback";
+    : `http://127.0.0.1:${localPort}/api/connectors/practicepanther/callback`;
   return {
     apiBaseUrl: env.PP_API_BASE_URL?.trim() || DEFAULT_PP_API_BASE_URL,
     clientId: env.PP_CLIENT_ID?.trim() ?? null,
@@ -49,6 +52,13 @@ export interface PracticePantherConnectionMetadata {
     refresh_token: string;
     token_type: string;
     expires_at: string;
+  };
+  oauth_encrypted?: {
+    v: 1;
+    alg: "aes-256-gcm";
+    iv: string;
+    tag: string;
+    ciphertext: string;
   };
   user?: {
     id?: string | null;
@@ -93,16 +103,104 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function readSourceConnectionSecret() {
+  const raw = process.env[SOURCE_CONNECTION_SECRET_ENV]?.trim();
+  if (!raw) {
+    return null;
+  }
+  return createHash("sha256").update(raw).digest();
+}
+
+function encryptMetadataValue(value: unknown) {
+  const key = readSourceConnectionSecret();
+  if (!key) {
+    return null;
+  }
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const plaintext = Buffer.from(JSON.stringify(value), "utf8");
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    v: 1 as const,
+    alg: "aes-256-gcm" as const,
+    iv: iv.toString("base64"),
+    tag: tag.toString("base64"),
+    ciphertext: ciphertext.toString("base64")
+  };
+}
+
+function decryptMetadataValue<T>(
+  value:
+    | {
+        v: 1;
+        alg: "aes-256-gcm";
+        iv: string;
+        tag: string;
+        ciphertext: string;
+      }
+    | undefined
+): T | null {
+  if (!value) {
+    return null;
+  }
+  const key = readSourceConnectionSecret();
+  if (!key) {
+    return null;
+  }
+  try {
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      key,
+      Buffer.from(value.iv, "base64")
+    );
+    decipher.setAuthTag(Buffer.from(value.tag, "base64"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(value.ciphertext, "base64")),
+      decipher.final()
+    ]).toString("utf8");
+    return JSON.parse(plaintext) as T;
+  } catch {
+    return null;
+  }
+}
+
 export function parsePracticePantherConnectionMetadata(raw: string | null | undefined): PracticePantherConnectionMetadata {
   if (!raw) {
     return {};
   }
   try {
     const parsed = JSON.parse(raw);
-    return isRecord(parsed) ? (parsed as PracticePantherConnectionMetadata) : {};
+    if (!isRecord(parsed)) {
+      return {};
+    }
+    const metadata = { ...(parsed as PracticePantherConnectionMetadata) };
+    if (!metadata.oauth && metadata.oauth_encrypted && isRecord(metadata.oauth_encrypted)) {
+      const decrypted = decryptMetadataValue<NonNullable<PracticePantherConnectionMetadata["oauth"]>>(
+        metadata.oauth_encrypted
+      );
+      if (decrypted) {
+        metadata.oauth = decrypted;
+      }
+    }
+    return metadata;
   } catch {
     return {};
   }
+}
+
+export function serializePracticePantherConnectionMetadata(
+  metadata: PracticePantherConnectionMetadata
+): string {
+  const next: PracticePantherConnectionMetadata = { ...metadata };
+  if (next.oauth) {
+    const encrypted = encryptMetadataValue(next.oauth);
+    if (encrypted) {
+      delete next.oauth;
+      next.oauth_encrypted = encrypted;
+    }
+  }
+  return JSON.stringify(next);
 }
 
 export function mergePracticePantherConnectionMetadata(

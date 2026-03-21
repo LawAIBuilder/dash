@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "assertion_style": "structural",
+  "cases": [
+    {
+      "id": "hearing_dianna_johnson_23739",
+      "label": "Dianna Johnson - 23739",
+      "package_type": "hearing_packet",
+      "source_root": "/Users/danielswenson/Desktop/Dianna_Johnson_Hearing_Prep",
+      "required_artifacts": [
+        "01_READ_EVERYTHING/file_inventory.md",
+        "01_READ_EVERYTHING/read_coverage_log.md",
+        "02_CASE_SPINE_AND_MED_CHRON/case_profile.md",
+        "02_CASE_SPINE_AND_MED_CHRON/issue_matrix.md",
+        "02_CASE_SPINE_AND_MED_CHRON/fact_timeline.md",
+        "02_CASE_SPINE_AND_MED_CHRON/exhibit_catalog.md",
+        "02_CASE_SPINE_AND_MED_CHRON/witness_matrix.md",
+        "02_CASE_SPINE_AND_MED_CHRON/deadlines_and_requirements.md",
+        "02_CASE_SPINE_AND_MED_CHRON/open_questions.md",
+        "02_CASE_SPINE_AND_MED_CHRON/proof_to_relief_graph.md",
+        "03_EXHIBIT_ASSEMBLY/exhibit_rationale_table.md",
+        "04_DRAFTING/hearing_prep_memo.md",
+        "04_DRAFTING/opening_statement.md",
+        "04_DRAFTING/examination_outlines.md",
+        "04_DRAFTING/missing_needed_list.md",
+        "04_DRAFTING/authority_verification_table.md",
+        "05_FINAL_QA/hearing_readiness_checklist.md",
+        "05_FINAL_QA/final_report.md",
+        "06_FINAL_DELIVERABLES/bates_map.json",
+        "06_FINAL_DELIVERABLES/filed_exhibit_book_dianna_johnson.pdf"
+      ],
+      "required_sections": {
+        "case_profile.md": ["hearing date", "judge", "requested relief"],
+        "issue_matrix.md": ["issue", "defense position", "proof gap"],
+        "hearing_prep_memo.md": ["issues", "requested relief", "medical chronology", "exhibit strategy"],
+        "opening_statement.md": ["requested relief"],
+        "hearing_readiness_checklist.md": ["Build Completion", "Remaining Readiness Risks"]
+      },
+      "required_outputs": [
+        "06_FINAL_DELIVERABLES/hearing_binder_dianna_johnson.html",
+        "06_FINAL_DELIVERABLES/filed_exhibit_book_dianna_johnson.pdf"
+      ],
+      "provenance_expectations": {
+        "requires_bates_map": true,
+        "requires_final_bates_citations": true,
+        "requires_read_coverage_log": true
+      }
+    },
+    {
+      "id": "demand_linda_parker_23209",
+      "label": "Linda Parker - 23209",
+      "package_type": "demand",
+      "source_root": "/Users/danielswenson/Desktop/Demand_Writer_Package/runs/linda_parker_23209",
+      "required_artifacts": [
+        "00_SOURCE_PULL/box_inventory.md",
+        "00_SOURCE_PULL/box_inventory.json",
+        "00_SOURCE_PULL/pp_exports/pp_matter.md",
+        "00_SOURCE_PULL/pp_exports/pp_notes.md",
+        "00_SOURCE_PULL/pp_exports/pp_tasks.md",
+        "00_SOURCE_PULL/pp_exports/pp_events.md",
+        "01_GPT_DRAFT/demand.md",
+        "03_OPUS_FINAL/demand_final.md",
+        "03_OPUS_FINAL/attorney_memo_final.md",
+        "03_OPUS_FINAL/exhibits/exhibit_manifest.json",
+        "03_OPUS_FINAL/verification_summary.md"
+      ],
+      "required_sections": {
+        "demand_final.md": ["Claim Description", "Medical Treatment Narrative", "Demand Amount"],
+        "attorney_memo_final.md": [],
+        "verification_summary.md": []
+      },
+      "required_outputs": [
+        "03_OPUS_FINAL/demand_final.html",
+        "03_OPUS_FINAL/attorney_memo_final.html"
+      ],
+      "provenance_expectations": {
+        "requires_source_pull_bundle": true,
+        "requires_pp_context": true,
+        "requires_exhibit_manifest": true
+      }
+    },
+    {
+      "id": "hearing_christina_shivel_23403",
+      "label": "Christina Shivel - 23403-MM",
+      "package_type": "hearing_packet",
+      "source_root": "/Users/danielswenson/Desktop/Shivel Hearing prep/Shivel_Hearing_Final_Prep_2026-03-17",
+      "required_artifacts": [
+        "FINAL_HEARING_README.md",
+        "03_hearing_prep_memo.md",
+        "shivel_hearing_binder.html",
+        "hearing_day_tool.html"
+      ],
+      "required_sections": {
+        "03_hearing_prep_memo.md": []
+      },
+      "required_outputs": [
+        "shivel_hearing_binder.html",
+        "hearing_day_tool.html"
+      ],
+      "provenance_expectations": {
+        "requires_hearing_binder": true,
+        "requires_final_readme": true
+      }
+    }
+  ]
+}

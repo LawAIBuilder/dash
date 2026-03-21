@@ -102,7 +102,6 @@ export interface PracticePantherConnectionStatus {
   external_account_id?: string | null;
   last_error_message?: string | null;
   last_verified_at?: string | null;
-  metadata_json?: string | null;
 }
 
 export interface PracticePantherMatterItem {
@@ -116,4 +115,37 @@ export interface PracticePantherMatterItem {
     id?: string | null;
     display_name?: string | null;
   } | null;
+}
+
+export interface CasePersonItem {
+  id: string;
+  name?: string | null;
+  role?: string | null;
+  organization?: string | null;
+  address?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  pp_contact_id?: string | null;
+  notes?: string | null;
+  created_at?: string | null;
+}
+
+export interface CaseTimelineItem {
+  id: string;
+  kind: string;
+  label: string;
+  detail?: string | null;
+  occurred_at?: string | null;
+}
+
+export interface CaseActivityEvent {
+  id: string;
+  branch_instance_id?: string | null;
+  preset_id?: string | null;
+  event_name: string;
+  source_type: string;
+  source_id: string;
+  occurred_at: string;
+  payload_json: string;
+  created_at?: string | null;
 }

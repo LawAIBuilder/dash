@@ -52,6 +52,12 @@ export interface PackageBundlePayload {
   approx_char_count: number;
 }
 
+interface FullDocumentMeta {
+  source_item_id: string;
+  title: string | null;
+  canonical_document_id: string | null;
+}
+
 function extractFolderPath(rawJsonStr: string | null, rootFolderId: string | null): string | null {
   if (!rawJsonStr) return null;
   try {
@@ -84,7 +90,7 @@ export function gatherDocumentSummaries(db: Database.Database, caseId: string): 
           (
             SELECT SUBSTR(cp.raw_text, 1, 500)
             FROM canonical_documents cd
-            JOIN canonical_pages cp ON cp.canonical_document_id = cd.id
+            JOIN canonical_pages cp ON cp.canonical_doc_id = cd.id
             WHERE json_extract(si.raw_json, '$.canonical_document_id') = cd.id
             ORDER BY cp.page_number_in_doc ASC
             LIMIT 1
@@ -106,21 +112,7 @@ export function gatherDocumentSummaries(db: Database.Database, caseId: string): 
   }>;
 
   return rows.map((row) => {
-    let folderPath: string | null = null;
-    if (row.raw_json) {
-      try {
-        const raw = JSON.parse(row.raw_json);
-        const pc = raw?.path_collection?.entries;
-        if (Array.isArray(pc)) {
-          folderPath = pc
-            .filter((e: { id?: string; name?: string }) => e.id !== "0")
-            .map((e: { name?: string; id?: string }) => e.name ?? e.id ?? "")
-            .join("/");
-        }
-      } catch {
-        folderPath = extractFolderPath(row.raw_json, boxRoot);
-      }
-    }
+    const folderPath = extractFolderPath(row.raw_json, boxRoot);
     return {
       source_item_id: row.source_item_id,
       title: row.title,
@@ -132,24 +124,12 @@ export function gatherDocumentSummaries(db: Database.Database, caseId: string): 
   });
 }
 
-export function getFullCanonicalTextForSourceItem(
+function buildFullDocumentText(
   db: Database.Database,
-  sourceItemId: string,
+  meta: FullDocumentMeta | undefined,
   options?: { maxChars?: number }
 ): FullDocumentText | null {
   const maxChars = options?.maxChars ?? DEFAULT_MAX_RETRIEVAL_CHARS;
-  const meta = db
-    .prepare(
-      `
-        SELECT si.id AS source_item_id, si.title, json_extract(si.raw_json, '$.canonical_document_id') AS canonical_document_id
-        FROM source_items si
-        WHERE si.id = ?
-        LIMIT 1
-      `
-    )
-    .get(sourceItemId) as
-    | { source_item_id: string; title: string | null; canonical_document_id: string | null }
-    | undefined;
   if (!meta?.canonical_document_id) {
     return null;
   }
@@ -195,10 +175,70 @@ export function getFullCanonicalTextForSourceItem(
   };
 }
 
+export function getFullCanonicalTextForSourceItem(
+  db: Database.Database,
+  sourceItemId: string,
+  options?: { maxChars?: number }
+): FullDocumentText | null {
+  const meta = db
+    .prepare(
+      `
+        SELECT si.id AS source_item_id, si.title, json_extract(si.raw_json, '$.canonical_document_id') AS canonical_document_id
+        FROM source_items si
+        WHERE si.id = ?
+        LIMIT 1
+      `
+    )
+    .get(sourceItemId) as FullDocumentMeta | undefined;
+
+  return buildFullDocumentText(db, meta, options);
+}
+
+export function getFullCanonicalTextForSourceItemInCase(
+  db: Database.Database,
+  caseId: string,
+  sourceItemId: string,
+  options?: { maxChars?: number }
+): FullDocumentText | null {
+  const meta = db
+    .prepare(
+      `
+        SELECT si.id AS source_item_id, si.title, json_extract(si.raw_json, '$.canonical_document_id') AS canonical_document_id
+        FROM source_items si
+        WHERE si.id = ?
+          AND si.case_id = ?
+        LIMIT 1
+      `
+    )
+    .get(sourceItemId, caseId) as FullDocumentMeta | undefined;
+
+  return buildFullDocumentText(db, meta, options);
+}
+
+export function listSourceItemsMissingFromCase(
+  db: Database.Database,
+  caseId: string,
+  sourceItemIds: string[]
+): string[] {
+  const uniqueIds = [...new Set(sourceItemIds.map((id) => id.trim()).filter(Boolean))];
+  if (uniqueIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = uniqueIds.map(() => "?").join(", ");
+  const ownedRows = db
+    .prepare(`SELECT id FROM source_items WHERE case_id = ? AND id IN (${placeholders})`)
+    .all(caseId, ...uniqueIds) as Array<{ id: string }>;
+  const ownedIds = new Set(ownedRows.map((row) => row.id));
+  return uniqueIds.filter((id) => !ownedIds.has(id));
+}
+
 export function getPageChunks(
   db: Database.Database,
   input: { sourceItemId: string; pageStart: number; pageEnd: number }
 ): ChunkRetrievalResult[] {
+  const pageStart = Math.min(input.pageStart, input.pageEnd);
+  const pageEnd = Math.max(input.pageStart, input.pageEnd);
   const docId = db
     .prepare(`SELECT json_extract(raw_json, '$.canonical_document_id') AS cid FROM source_items WHERE id = ?`)
     .get(input.sourceItemId) as { cid: string | null } | undefined;
@@ -216,7 +256,50 @@ export function getPageChunks(
         ORDER BY cp.page_number_in_doc ASC
       `
     )
-    .all(docId.cid, input.pageStart, input.pageEnd) as Array<{
+    .all(docId.cid, pageStart, pageEnd) as Array<{
+    canonical_page_id: string;
+    page_number: number;
+    raw_text: string | null;
+  }>;
+  return rows.map((r) => ({
+    source_item_id: input.sourceItemId,
+    canonical_page_id: r.canonical_page_id,
+    page_number: r.page_number,
+    text: r.raw_text ?? ""
+  }));
+}
+
+export function getPageChunksInCase(
+  db: Database.Database,
+  input: { caseId: string; sourceItemId: string; pageStart: number; pageEnd: number }
+): ChunkRetrievalResult[] {
+  const pageStart = Math.min(input.pageStart, input.pageEnd);
+  const pageEnd = Math.max(input.pageStart, input.pageEnd);
+  const docId = db
+    .prepare(
+      `
+        SELECT json_extract(raw_json, '$.canonical_document_id') AS cid
+        FROM source_items
+        WHERE id = ?
+          AND case_id = ?
+      `
+    )
+    .get(input.sourceItemId, input.caseId) as { cid: string | null } | undefined;
+  if (!docId?.cid) {
+    return [];
+  }
+  const rows = db
+    .prepare(
+      `
+        SELECT cp.id AS canonical_page_id, cp.page_number_in_doc AS page_number, cp.raw_text
+        FROM canonical_pages cp
+        WHERE cp.canonical_doc_id = ?
+          AND cp.page_number_in_doc >= ?
+          AND cp.page_number_in_doc <= ?
+        ORDER BY cp.page_number_in_doc ASC
+      `
+    )
+    .all(docId.cid, pageStart, pageEnd) as Array<{
     canonical_page_id: string;
     page_number: number;
     raw_text: string | null;
@@ -321,10 +404,21 @@ export function buildPackageBundle(db: Database.Database, input: BuildPackageBun
   const summaries = gatherDocumentSummaries(db, input.caseId);
   const fullDocuments: FullDocumentText[] = [];
   let charBudget = maxChars;
+  const invalidWholeFileIds = listSourceItemsMissingFromCase(db, input.caseId, input.wholeFileSourceItemIds ?? []);
+  const invalidWholeFileIdSet = new Set(invalidWholeFileIds);
+  for (const sid of invalidWholeFileIds) {
+    warnings.push({
+      code: "skipped_source_item_case_mismatch",
+      message: `Skipped whole-file source item ${sid} because it does not belong to case ${input.caseId}`
+    });
+  }
 
   for (const sid of input.wholeFileSourceItemIds ?? []) {
+    if (invalidWholeFileIdSet.has(sid.trim())) {
+      continue;
+    }
     const perDocCap = Math.min(charBudget, DEFAULT_MAX_RETRIEVAL_CHARS);
-    const doc = getFullCanonicalTextForSourceItem(db, sid, { maxChars: perDocCap });
+    const doc = getFullCanonicalTextForSourceItemInCase(db, input.caseId, sid, { maxChars: perDocCap });
     if (doc) {
       fullDocuments.push(doc);
       charBudget -= doc.full_text.length;
@@ -339,8 +433,22 @@ export function buildPackageBundle(db: Database.Database, input: BuildPackageBun
   }
 
   const chunks: ChunkRetrievalResult[] = [];
+  const invalidChunkSourceIds = new Set(
+    listSourceItemsMissingFromCase(
+      db,
+      input.caseId,
+      (input.chunkRequests ?? []).map((req) => req.sourceItemId)
+    )
+  );
   for (const req of input.chunkRequests ?? []) {
-    chunks.push(...getPageChunks(db, req));
+    if (invalidChunkSourceIds.has(req.sourceItemId.trim())) {
+      warnings.push({
+        code: "skipped_chunk_source_item_case_mismatch",
+        message: `Skipped chunk request for source item ${req.sourceItemId} because it does not belong to case ${input.caseId}`
+      });
+      continue;
+    }
+    chunks.push(...getPageChunksInCase(db, { caseId: input.caseId, ...req }));
   }
 
   const pp_context = loadPpContextBundle(db, input.caseId);
