@@ -136,7 +136,8 @@ describe("mapBoxFolderListEntry", () => {
   it("maps folder entries for recursive sync", () => {
     expect(mapBoxFolderListEntry({ id: "sub", type: "folder", name: "Child" }, "p")).toEqual({
       kind: "folder",
-      folderId: "sub"
+      folderId: "sub",
+      folderName: "Child"
     });
   });
 

@@ -24,7 +24,7 @@ function formatBoxModifiedAt(value: unknown): string | null {
 
 export type BoxFolderListEntryMap =
   | { kind: "file"; file: BoxInventoryAdapterInput }
-  | { kind: "folder"; folderId: string }
+  | { kind: "folder"; folderId: string; folderName: string | null }
   | { kind: "ignore" };
 
 export function mapBoxFolderListEntry(entry: unknown, parentFolderId: string): BoxFolderListEntryMap {
@@ -42,7 +42,7 @@ export function mapBoxFolderListEntry(entry: unknown, parentFolderId: string): B
   }
 
   if (entryType === "folder") {
-    return { kind: "folder", folderId: id };
+    return { kind: "folder", folderId: id, folderName: typeof e.name === "string" ? e.name : null };
   }
 
   if (entryType !== "file") {
@@ -81,9 +81,15 @@ export function mapBoxFolderListEntry(entry: unknown, parentFolderId: string): B
   };
 }
 
+export interface BoxSubfolder {
+  id: string;
+  name: string | null;
+}
+
 export interface BoxFolderPage {
   files: BoxInventoryAdapterInput[];
   subfolderIds: string[];
+  subfolders: BoxSubfolder[];
   nextMarker: string | null;
   totalCount: number | null;
 }
@@ -107,6 +113,7 @@ export async function fetchBoxFolderPage(
 
   const files: BoxInventoryAdapterInput[] = [];
   const subfolderIds: string[] = [];
+  const subfolders: BoxSubfolder[] = [];
 
   for (const entry of response.entries ?? []) {
     const mapped = mapBoxFolderListEntry(entry, folderId);
@@ -114,12 +121,14 @@ export async function fetchBoxFolderPage(
       files.push(mapped.file);
     } else if (mapped.kind === "folder") {
       subfolderIds.push(mapped.folderId);
+      subfolders.push({ id: mapped.folderId, name: mapped.folderName });
     }
   }
 
   return {
     files,
     subfolderIds,
+    subfolders,
     nextMarker: response.nextMarker ?? null,
     totalCount: response.totalCount ?? null
   };
@@ -411,12 +420,14 @@ export async function fetchBoxFolderInventory(
   }
 ): Promise<{
   files: BoxInventoryAdapterInput[];
+  subfolders: BoxSubfolder[];
   nextMarker: string | null;
   totalCount: number | null;
 }> {
   const page = await fetchBoxFolderPage(client, folderId, options);
   return {
     files: page.files,
+    subfolders: page.subfolders,
     nextMarker: page.nextMarker,
     totalCount: page.totalCount
   };

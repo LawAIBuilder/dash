@@ -1483,7 +1483,8 @@ app.get("/api/connectors/box/folders/:folderId/items", async (request, reply) =>
     folder_id: folderId,
     next_marker: inventory.nextMarker,
     total_count: inventory.totalCount,
-    files: inventory.files
+    files: inventory.files,
+    subfolders: inventory.subfolders
   };
 });
 
