@@ -20,6 +20,7 @@ import {
   classifySourceItemByFilename,
   completeSourceConnectionAuth,
   createRunManifest,
+  evaluateMedicalRequestBranch,
   ensureCaseScaffold,
   ensureSourceConnection,
   hydrateBoxInventory,
@@ -70,6 +71,171 @@ app.get("/health", async () => ({
   service: "wc-authoritative-api",
   seeded_at_startup: true
 }));
+
+app.get("/api/cases", async () => {
+  const cases = db
+    .prepare(
+      `
+        SELECT
+          c.id,
+          c.name,
+          c.case_type,
+          c.status,
+          c.employee_name,
+          c.employer_name,
+          c.insurer_name,
+          c.hearing_date,
+          c.pp_matter_id,
+          c.box_root_folder_id,
+          c.created_at,
+          c.updated_at,
+          COALESCE(conn.status, 'inactive') AS box_connection_status,
+          COALESCE(sync.latest_sync_status, 'not_synced') AS latest_sync_status,
+          COALESCE(inv.source_item_count, 0) AS source_item_count
+        FROM cases c
+        LEFT JOIN (
+          SELECT si.case_id, COUNT(*) AS source_item_count
+          FROM source_items si
+          GROUP BY si.case_id
+        ) inv ON inv.case_id = c.id
+        LEFT JOIN (
+          SELECT
+            sr.case_id,
+            sc.status,
+            ROW_NUMBER() OVER (PARTITION BY sr.case_id ORDER BY sr.started_at DESC) AS rn
+          FROM sync_runs sr
+          JOIN source_connections sc ON sc.id = sr.source_connection_id
+          WHERE sc.provider = 'box'
+        ) conn ON conn.case_id = c.id AND conn.rn = 1
+        LEFT JOIN (
+          SELECT
+            sr.case_id,
+            sr.status AS latest_sync_status,
+            ROW_NUMBER() OVER (PARTITION BY sr.case_id ORDER BY sr.started_at DESC) AS rn
+          FROM sync_runs sr
+          JOIN source_connections sc ON sc.id = sr.source_connection_id
+          WHERE sc.provider = 'box'
+        ) sync ON sync.case_id = c.id AND sync.rn = 1
+        ORDER BY COALESCE(c.updated_at, c.created_at) DESC
+      `
+    )
+    .all();
+
+  return { cases };
+});
+
+app.post("/api/cases", async (request, reply) => {
+  const body = request.body as
+    | {
+        case_id?: string;
+        name?: string;
+        case_type?: string;
+        pp_matter_id?: string;
+        box_root_folder_id?: string;
+        employee_name?: string;
+        employer_name?: string;
+        insurer_name?: string;
+        hearing_date?: string;
+      }
+    | undefined;
+
+  if (!body?.name?.trim()) {
+    return reply.code(400).send({ ok: false, error: "name is required" });
+  }
+
+  const scaffold = ensureCaseScaffold(db, {
+    caseId: body.case_id,
+    name: body.name.trim(),
+    caseType: body.case_type,
+    ppMatterId: body.pp_matter_id ?? null,
+    boxRootFolderId: body.box_root_folder_id ?? null,
+    employeeName: body.employee_name ?? null,
+    employerName: body.employer_name ?? null,
+    insurerName: body.insurer_name ?? null,
+    hearingDate: body.hearing_date ?? null
+  });
+
+  const row = db
+    .prepare(
+      `
+        SELECT id, name, case_type, status, employee_name, employer_name, insurer_name, hearing_date, pp_matter_id, box_root_folder_id, created_at, updated_at
+        FROM cases
+        WHERE id = ?
+        LIMIT 1
+      `
+    )
+    .get(scaffold.caseId);
+
+  return { ok: true, case: row, issue_id: scaffold.issueId, branch_instance_id: scaffold.branchInstanceId };
+});
+
+app.get("/api/cases/:caseId", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const row = db
+    .prepare(
+      `
+        SELECT id, name, case_type, status, employee_name, employer_name, insurer_name, hearing_date, pp_matter_id, box_root_folder_id, created_at, updated_at
+        FROM cases
+        WHERE id = ?
+        LIMIT 1
+      `
+    )
+    .get(caseId);
+
+  if (!row) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+
+  return { ok: true, case: row };
+});
+
+app.patch("/api/cases/:caseId", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as
+    | {
+        name?: string;
+        case_type?: string;
+        pp_matter_id?: string | null;
+        box_root_folder_id?: string | null;
+        employee_name?: string | null;
+        employer_name?: string | null;
+        insurer_name?: string | null;
+        hearing_date?: string | null;
+      }
+    | undefined;
+
+  const existing = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
+    | { id: string }
+    | undefined;
+  if (!existing) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+
+  ensureCaseScaffold(db, {
+    caseId,
+    name: body?.name,
+    caseType: body?.case_type,
+    ppMatterId: body?.pp_matter_id ?? null,
+    boxRootFolderId: body?.box_root_folder_id ?? null,
+    employeeName: body?.employee_name ?? null,
+    employerName: body?.employer_name ?? null,
+    insurerName: body?.insurer_name ?? null,
+    hearingDate: body?.hearing_date ?? null
+  });
+
+  const row = db
+    .prepare(
+      `
+        SELECT id, name, case_type, status, employee_name, employer_name, insurer_name, hearing_date, pp_matter_id, box_root_folder_id, created_at, updated_at
+        FROM cases
+        WHERE id = ?
+        LIMIT 1
+      `
+    )
+    .get(caseId);
+
+  return { ok: true, case: row };
+});
 
 app.post("/dev/cases", async (request) => {
   const body = request.body as
@@ -548,6 +714,85 @@ app.post("/api/source-items/:sourceItemId/classify", async (request, reply) => {
   return result;
 });
 
+app.patch("/api/source-items/:sourceItemId/classification", async (request, reply) => {
+  const { sourceItemId } = request.params as { sourceItemId: string };
+  const body = request.body as
+    | {
+        document_type_id?: string | null;
+        clear?: boolean;
+      }
+    | undefined;
+
+  const sourceItem = db
+    .prepare(`SELECT id, case_id FROM source_items WHERE id = ? LIMIT 1`)
+    .get(sourceItemId) as { id: string; case_id: string } | undefined;
+  if (!sourceItem) {
+    return reply.code(404).send({ ok: false, error: "source item not found" });
+  }
+
+  if (body?.clear === true) {
+    db.prepare(
+      `
+        UPDATE source_items
+        SET document_type_id = NULL,
+            document_type_name = NULL,
+            classification_method = 'manual_clear',
+            classification_confidence = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `
+    ).run(sourceItemId);
+
+    evaluateMedicalRequestBranch(db, sourceItem.case_id);
+    return { ok: true, source_item_id: sourceItemId, classification_method: "manual_clear" };
+  }
+
+  if (!body?.document_type_id) {
+    return reply.code(400).send({ ok: false, error: "document_type_id is required unless clear=true" });
+  }
+
+  const documentType = db
+    .prepare(`SELECT id, canonical_name FROM document_types WHERE id = ? LIMIT 1`)
+    .get(body.document_type_id) as { id: string; canonical_name: string } | undefined;
+  if (!documentType) {
+    return reply.code(404).send({ ok: false, error: "document type not found" });
+  }
+
+  db.prepare(
+    `
+      UPDATE source_items
+      SET document_type_id = ?,
+          document_type_name = ?,
+          classification_method = 'manual_override',
+          classification_confidence = 1.0,
+          raw_json = json_set(
+            COALESCE(raw_json, '{}'),
+            '$.document_type_id', ?,
+            '$.document_type_name', ?,
+            '$.classification_method', 'manual_override'
+          ),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+  ).run(
+    documentType.id,
+    documentType.canonical_name,
+    documentType.id,
+    documentType.canonical_name,
+    sourceItemId
+  );
+
+  evaluateMedicalRequestBranch(db, sourceItem.case_id);
+
+  return {
+    ok: true,
+    source_item_id: sourceItemId,
+    document_type_id: documentType.id,
+    document_type_name: documentType.canonical_name,
+    classification_method: "manual_override"
+  };
+});
+
 app.post("/dev/classify-source-item", async (request, reply) => {
   const body = request.body as { source_item_id?: string; filename?: string } | undefined;
   if (!body?.source_item_id || !body?.filename) {
@@ -605,6 +850,120 @@ app.post("/dev/cases/:caseId/normalize-documents", async (request, reply) => {
     sourceItemIds: body?.source_item_ids,
     stubPageCount: body?.stub_page_count ?? body?.stubPageCount ?? null
   });
+});
+
+app.post("/api/cases/:caseId/normalize-documents", async (request, reply) => {
+  const body = request.body as
+    | {
+        source_item_ids?: string[];
+        stub_page_count?: number;
+        stubPageCount?: number;
+      }
+    | undefined;
+  const { caseId } = request.params as { caseId: string };
+
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
+    | { id: string }
+    | undefined;
+  if (!caseExists) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+
+  return normalizeCaseDocumentSpine(db, {
+    caseId,
+    sourceItemIds: body?.source_item_ids,
+    stubPageCount: body?.stub_page_count ?? body?.stubPageCount ?? null
+  });
+});
+
+app.get("/api/cases/:caseId/review-queue", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
+    | { id: string }
+    | undefined;
+  if (!caseExists) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+
+  const ocrReviews = db
+    .prepare(
+      `
+        SELECT
+          cp.id AS canonical_page_id,
+          cp.page_number_in_doc AS page_number,
+          cp.raw_text,
+          cp.ocr_method,
+          cp.ocr_confidence,
+          cp.ocr_status,
+          cp.extraction_status,
+          cd.id AS canonical_document_id,
+          cd.title AS canonical_document_title,
+          si.id AS source_item_id,
+          si.title AS source_item_title,
+          si.document_type_name,
+          rq.id AS review_id,
+          rq.severity,
+          rq.review_status,
+          rq.review_note,
+          rq.blocker_for_branch,
+          rq.blocker_for_preset
+        FROM ocr_review_queue rq
+        JOIN canonical_pages cp ON cp.id = rq.canonical_page_id
+        JOIN canonical_documents cd ON cd.id = cp.canonical_doc_id
+        LEFT JOIN logical_documents ld ON ld.id = cd.logical_document_id
+        LEFT JOIN source_items si ON si.id = ld.source_item_id
+        WHERE rq.case_id = ?
+          AND rq.review_status IN ('pending', 'in_review')
+        ORDER BY rq.created_at ASC, cd.created_at ASC, cp.page_number_in_doc ASC
+      `
+    )
+    .all(caseId);
+
+  const unclassifiedDocuments = db
+    .prepare(
+      `
+        SELECT
+          si.id AS source_item_id,
+          si.title,
+          si.provider,
+          si.source_kind,
+          si.updated_at,
+          json_extract(si.raw_json, '$.canonical_document_id') AS canonical_document_id
+        FROM source_items si
+        WHERE si.case_id = ?
+          AND si.document_type_id IS NULL
+          AND si.document_type_name IS NULL
+        ORDER BY si.created_at ASC
+      `
+    )
+    .all(caseId);
+
+  const missingProof = db
+    .prepare(
+      `
+        SELECT
+          pr.id AS proof_requirement_id,
+          pr.issue_id,
+          pr.requirement_key,
+          pr.requirement_policy,
+          pr.rationale,
+          i.issue_type
+        FROM proof_requirements pr
+        JOIN issues i ON i.id = pr.issue_id
+        WHERE i.case_id = ?
+          AND COALESCE(pr.satisfied, 0) = 0
+        ORDER BY i.priority ASC, pr.requirement_key ASC
+      `
+    )
+    .all(caseId);
+
+  return {
+    ok: true,
+    case_id: caseId,
+    ocr_reviews: ocrReviews,
+    unclassified_documents: unclassifiedDocuments,
+    missing_proof: missingProof
+  };
 });
 
 app.post("/api/cases/:caseId/ocr/queue", async (request, reply) => {

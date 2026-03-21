@@ -1,0 +1,196 @@
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Plus, Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useCaseList, useCreateCase } from "@/hooks/useCaseList";
+import { formatDateTime, formatLabel } from "@/ui/formatters";
+import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
+import { PageSkeleton } from "@/components/case/PageSkeleton";
+
+export function CaseListPage() {
+  const navigate = useNavigate();
+  const { data: cases = [], isLoading, error } = useCaseList();
+  const createCase = useCreateCase();
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    case_type: "wc",
+    box_root_folder_id: "",
+    employee_name: "",
+    employer_name: "",
+    hearing_date: ""
+  });
+
+  const filteredCases = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) {
+      return cases;
+    }
+    return cases.filter((item) =>
+      [item.name, item.employee_name, item.employer_name, item.case_type]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(needle))
+    );
+  }, [cases, search]);
+
+  async function handleCreateCase() {
+    try {
+      const created = await createCase.mutateAsync({
+        name: form.name.trim(),
+        case_type: form.case_type,
+        box_root_folder_id: form.box_root_folder_id.trim() || null,
+        employee_name: form.employee_name.trim() || null,
+        employer_name: form.employer_name.trim() || null,
+        hearing_date: form.hearing_date.trim() || null
+      });
+      toast.success("Case created");
+      setOpen(false);
+      setForm({
+        name: "",
+        case_type: "wc",
+        box_root_folder_id: "",
+        employee_name: "",
+        employer_name: "",
+        hearing_date: ""
+      });
+      navigate(`/cases/${created.id}`);
+    } catch (createError) {
+      toast.error(createError instanceof Error ? createError.message : "Case creation failed");
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-semibold">Cases</h2>
+          <p className="text-sm text-muted-foreground">
+            Start from a real matter list instead of pasting UUIDs into a debug screen.
+          </p>
+        </div>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild>
+            <Button className="gap-2">
+              <Plus className="size-4" />
+              New case
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create case</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-3 py-2">
+              <Input
+                placeholder="Matter name"
+                value={form.name}
+                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+              />
+              <Input
+                placeholder="Box Client File folder ID"
+                value={form.box_root_folder_id}
+                onChange={(event) =>
+                  setForm((current) => ({ ...current, box_root_folder_id: event.target.value }))
+                }
+              />
+              <Input
+                placeholder="Employee name"
+                value={form.employee_name}
+                onChange={(event) => setForm((current) => ({ ...current, employee_name: event.target.value }))}
+              />
+              <Input
+                placeholder="Employer name"
+                value={form.employer_name}
+                onChange={(event) => setForm((current) => ({ ...current, employer_name: event.target.value }))}
+              />
+              <Input
+                placeholder="Hearing date (YYYY-MM-DD)"
+                value={form.hearing_date}
+                onChange={(event) => setForm((current) => ({ ...current, hearing_date: event.target.value }))}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button disabled={!form.name.trim() || createCase.isPending} onClick={() => void handleCreateCase()}>
+                {createCase.isPending ? "Creating…" : "Create case"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>All matters</CardTitle>
+          <CardDescription>Each row shows Box sync health and top-level hearing context.</CardDescription>
+          <div className="relative max-w-sm">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input className="pl-9" placeholder="Search matters…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+        </CardHeader>
+        <CardContent>
+          {error ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              {error instanceof Error ? error.message : "Failed to load cases."}
+            </div>
+          ) : null}
+
+          {isLoading ? (
+            <PageSkeleton rows={5} />
+          ) : filteredCases.length > 0 ? (
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Matter</TableHead>
+                    <TableHead>Employee</TableHead>
+                    <TableHead>Employer</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Hearing</TableHead>
+                    <TableHead>Box</TableHead>
+                    <TableHead>Items</TableHead>
+                    <TableHead>Updated</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredCases.map((item) => (
+                    <TableRow
+                      key={item.id}
+                      className="cursor-pointer"
+                      onClick={() => navigate(`/cases/${item.id}`)}
+                    >
+                      <TableCell>
+                        <div className="font-medium">{item.name}</div>
+                        <div className="text-xs text-muted-foreground">{item.id}</div>
+                      </TableCell>
+                      <TableCell>{item.employee_name ?? "—"}</TableCell>
+                      <TableCell>{item.employer_name ?? "—"}</TableCell>
+                      <TableCell>{formatLabel(item.case_type)}</TableCell>
+                      <TableCell>{item.hearing_date ?? "—"}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{formatLabel(item.box_connection_status ?? "inactive")}</Badge>
+                      </TableCell>
+                      <TableCell>{item.source_item_count ?? 0}</TableCell>
+                      <TableCell>{formatDateTime(item.updated_at ?? item.created_at ?? null)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+              No matters yet. Create the first case and link a Box folder to begin.
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
