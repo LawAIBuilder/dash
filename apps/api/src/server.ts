@@ -158,6 +158,7 @@ import {
 } from "./env.js";
 import { buildApiErrorResponse } from "./error-response.js";
 import { createFixedWindowRateLimiter } from "./rate-limit.js";
+import { consumeDailyUsageQuota } from "./usage-counters.js";
 
 const db = openDatabase();
 seedFoundation(db);
@@ -297,6 +298,22 @@ const EXPENSIVE_ROUTE_LIMIT_WINDOW_MS = readPositiveIntegerEnv("WC_EXPENSIVE_ROU
   min: 1_000,
   max: 15 * 60_000
 });
+const AI_ASSEMBLE_DAILY_LIMIT = readPositiveIntegerEnv("WC_AI_ASSEMBLE_DAILY_LIMIT", 25, {
+  min: 1,
+  max: 1_000
+});
+const PACKAGE_RUN_DAILY_LIMIT = readPositiveIntegerEnv("WC_PACKAGE_RUN_DAILY_LIMIT", 40, {
+  min: 1,
+  max: 1_000
+});
+const PACKAGE_EXPORT_DAILY_LIMIT = readPositiveIntegerEnv("WC_PACKAGE_EXPORT_DAILY_LIMIT", 60, {
+  min: 1,
+  max: 2_000
+});
+const PACKET_PDF_EXPORT_DAILY_LIMIT = readPositiveIntegerEnv("WC_PACKET_PDF_EXPORT_DAILY_LIMIT", 40, {
+  min: 1,
+  max: 2_000
+});
 const expensiveRouteLimiter = createFixedWindowRateLimiter({
   max: EXPENSIVE_ROUTE_LIMIT_MAX,
   windowMs: EXPENSIVE_ROUTE_LIMIT_WINDOW_MS
@@ -329,6 +346,37 @@ function enforceExpensiveRouteRateLimit(
     void reply.code(429).send({
       ok: false,
       error: "Too many expensive requests. Please retry shortly."
+    });
+    return false;
+  }
+  return true;
+}
+
+function enforceCaseDailyUsageLimit(
+  reply: {
+    header: (name: string, value: string | number) => unknown;
+    code: (c: number) => { send: (b: unknown) => unknown };
+  },
+  input: {
+    caseId: string;
+    counterKey: string;
+    limit: number;
+    label: string;
+  }
+): boolean {
+  const result = consumeDailyUsageQuota(db, {
+    caseId: input.caseId,
+    counterKey: input.counterKey,
+    limit: input.limit
+  });
+  reply.header("x-case-usage-limit", result.limit);
+  reply.header("x-case-usage-remaining", result.remaining);
+  if (!result.allowed) {
+    reply.header("retry-after", result.retryAfterSeconds);
+    void reply.code(429).send({
+      ok: false,
+      code: "daily_case_quota_exceeded",
+      error: `Daily case quota reached for ${input.label}. Please retry tomorrow.`
     });
     return false;
   }
@@ -1511,6 +1559,16 @@ app.post("/api/cases/:caseId/exhibit-packets/:packetId/exports/packet-pdf", asyn
   const packetCase = getPacketCaseId(db, packetId);
   if (!packetCase || packetCase.case_id !== caseId) {
     return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+  if (
+    !enforceCaseDailyUsageLimit(reply, {
+      caseId,
+      counterKey: "packet_pdf_export",
+      limit: PACKET_PDF_EXPORT_DAILY_LIMIT,
+      label: "packet PDF exports"
+    })
+  ) {
+    return;
   }
   const layout = parsePacketPdfExportOptions(request.body);
   try {
@@ -3464,6 +3522,16 @@ app.post("/api/cases/:caseId/exhibit-packets/:packetId/package-runs", async (req
   if (body?.whole_file_source_item_ids?.length && !assertSourceItemsBelongToCase(caseId, body.whole_file_source_item_ids, reply)) {
     return;
   }
+  if (
+    !enforceCaseDailyUsageLimit(reply, {
+      caseId,
+      counterKey: "package_run",
+      limit: PACKAGE_RUN_DAILY_LIMIT,
+      label: "package runs"
+    })
+  ) {
+    return;
+  }
   const run = await runPackageWorker(db, {
     caseId,
     packetId,
@@ -3549,6 +3617,16 @@ app.post("/api/cases/:caseId/package-runs/:runId/export-docx", async (request, r
   }
   if (run.approval_status !== "approved") {
     return reply.code(409).send({ ok: false, error: "run must be approved before DOCX export" });
+  }
+  if (
+    !enforceCaseDailyUsageLimit(reply, {
+      caseId,
+      counterKey: "package_docx_export",
+      limit: PACKAGE_EXPORT_DAILY_LIMIT,
+      label: "package DOCX exports"
+    })
+  ) {
+    return;
   }
   let draft = "";
   try {
@@ -3641,6 +3719,16 @@ app.post("/api/cases/:caseId/ai/assemble", async (request, reply) => {
   const configs = listAIEventConfigs(db, caseId);
   const config = configs.find((c) => c.event_type === assemblyEventType);
   if (!config) return reply.code(404).send({ ok: false, error: "no config for this event type" });
+  if (
+    !enforceCaseDailyUsageLimit(reply, {
+      caseId,
+      counterKey: "ai_assemble",
+      limit: AI_ASSEMBLE_DAILY_LIMIT,
+      label: "AI assembly jobs"
+    })
+  ) {
+    return;
+  }
 
   const job = await runAIAssemblyJob(db, { caseId, eventType: assemblyEventType, config });
   return { ok: true, job };

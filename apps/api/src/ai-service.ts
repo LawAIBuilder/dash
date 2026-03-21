@@ -7,6 +7,74 @@ import { getPacketPreview } from "./exhibits.js";
 
 const DEFAULT_MODEL = "gpt-4o";
 
+function classifyAIError(
+  error: unknown,
+  fallbackMessage: string
+): {
+  message: string;
+  code: string;
+} {
+  const message = error instanceof Error && error.message.trim() ? error.message : fallbackMessage;
+  const lowerMessage = message.toLowerCase();
+  const status =
+    error && typeof error === "object" && "status" in error && typeof error.status === "number"
+      ? error.status
+      : null;
+  const providerCode =
+    error && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code.toLowerCase()
+      : null;
+  const errorName =
+    error && typeof error === "object" && "name" in error && typeof error.name === "string"
+      ? error.name.toLowerCase()
+      : "";
+
+  if (lowerMessage.includes("openai_api_key not configured")) {
+    return { message, code: "missing_api_key" };
+  }
+  if (
+    status === 429 ||
+    providerCode === "rate_limit_exceeded" ||
+    lowerMessage.includes("rate limit")
+  ) {
+    return { message, code: "provider_rate_limited" };
+  }
+  if (
+    status === 401 ||
+    status === 403 ||
+    providerCode === "invalid_api_key" ||
+    lowerMessage.includes("incorrect api key") ||
+    lowerMessage.includes("unauthorized")
+  ) {
+    return { message, code: "provider_auth_failed" };
+  }
+  if (
+    providerCode === "context_length_exceeded" ||
+    lowerMessage.includes("context length") ||
+    lowerMessage.includes("maximum context length")
+  ) {
+    return { message, code: "context_length_exceeded" };
+  }
+  if (
+    status === 408 ||
+    providerCode === "etimedout" ||
+    providerCode === "econnreset" ||
+    providerCode === "econnrefused" ||
+    lowerMessage.includes("timed out") ||
+    lowerMessage.includes("connection error") ||
+    errorName.includes("apiconnectionerror")
+  ) {
+    return { message, code: "provider_connection_error" };
+  }
+  if (status !== null && status >= 500) {
+    return { message, code: "provider_server_error" };
+  }
+  if (status === 400) {
+    return { message, code: "invalid_request" };
+  }
+  return { message, code: "unknown_ai_error" };
+}
+
 function getOpenAIClient() {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return null;
@@ -104,6 +172,7 @@ export interface AIJob {
   input_json: string | null;
   output_json: string | null;
   error_message: string | null;
+  error_code: string | null;
   model: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
@@ -132,8 +201,8 @@ export async function runAIAssemblyJob(
 
   if (!client) {
     db.prepare(
-      `INSERT INTO ai_jobs (id, case_id, event_type, status, error_message, model) VALUES (?, ?, ?, 'failed', ?, ?)`
-    ).run(jobId, input.caseId, input.eventType, "OPENAI_API_KEY not configured", model);
+      `INSERT INTO ai_jobs (id, case_id, event_type, status, error_message, error_code, model) VALUES (?, ?, ?, 'failed', ?, ?, ?)`
+    ).run(jobId, input.caseId, input.eventType, "OPENAI_API_KEY not configured", "missing_api_key", model);
     return db.prepare(`SELECT * FROM ai_jobs WHERE id = ?`).get(jobId) as AIJob;
   }
 
@@ -214,10 +283,10 @@ Recommend exhibits now. Return only valid JSON: { "exhibits": [...] }`;
        WHERE id = ?`
     ).run(content, usage?.prompt_tokens ?? null, usage?.completion_tokens ?? null, jobId);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "AI call failed";
+    const classified = classifyAIError(error, "AI call failed");
     db.prepare(
-      `UPDATE ai_jobs SET status = 'failed', error_message = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(message, jobId);
+      `UPDATE ai_jobs SET status = 'failed', error_message = ?, error_code = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(classified.message, classified.code, jobId);
   }
 
   return db.prepare(`SELECT * FROM ai_jobs WHERE id = ?`).get(jobId) as AIJob;
@@ -235,6 +304,7 @@ export interface PackageRunRow {
   output_json: string | null;
   citations_json: string | null;
   error_message: string | null;
+  error_code: string | null;
   model: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
@@ -399,9 +469,9 @@ export async function runPackageWorker(
 
   if (!packet || packet.case_id !== input.caseId) {
     db.prepare(
-      `INSERT INTO package_runs (id, packet_id, status, error_message, model, completed_at)
-       VALUES (?, ?, 'failed', ?, ?, CURRENT_TIMESTAMP)`
-    ).run(runId, input.packetId, "packet not found for case", model);
+      `INSERT INTO package_runs (id, packet_id, status, error_message, error_code, model, completed_at)
+       VALUES (?, ?, 'failed', ?, ?, ?, CURRENT_TIMESTAMP)`
+    ).run(runId, input.packetId, "packet not found for case", "packet_case_mismatch", model);
     return db.prepare(`SELECT * FROM package_runs WHERE id = ?`).get(runId) as PackageRunRow;
   }
 
@@ -422,13 +492,14 @@ export async function runPackageWorker(
 
   if (!client) {
     db.prepare(
-      `INSERT INTO package_runs (id, packet_id, status, input_json, error_message, model, retrieval_warnings_json, completed_at)
-       VALUES (?, ?, 'failed', ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+      `INSERT INTO package_runs (id, packet_id, status, input_json, error_message, error_code, model, retrieval_warnings_json, completed_at)
+       VALUES (?, ?, 'failed', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
     ).run(
       runId,
       input.packetId,
       JSON.stringify({ packet_id: input.packetId, package_type: packet.package_type }),
       "OPENAI_API_KEY not configured",
+      "missing_api_key",
       model,
       JSON.stringify(bundle.warnings)
     );
@@ -506,10 +577,10 @@ Retrieval bundle (JSON):\n${bundleJson.slice(0, Math.min(bundleJson.length, DEFA
       input.packetId
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "package worker failed";
+    const classified = classifyAIError(error, "package worker failed");
     db.prepare(
-      `UPDATE package_runs SET status = 'failed', error_message = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(message, runId);
+      `UPDATE package_runs SET status = 'failed', error_message = ?, error_code = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(classified.message, classified.code, runId);
     db.prepare(`UPDATE exhibit_packets SET run_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(
       "failed",
       input.packetId

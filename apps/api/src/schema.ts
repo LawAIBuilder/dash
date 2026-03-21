@@ -1158,5 +1158,26 @@ export const authoritativeMigrations: AuthoritativeMigration[] = [
     up(db) {
       addColumnIfMissing(db, "sync_runs", "warning_message", "warning_message TEXT");
     }
+  },
+  {
+    id: "0022_ai_error_codes_and_usage_counters",
+    description: "Track structured AI/package error codes and daily usage counters",
+    up(db) {
+      addColumnIfMissing(db, "ai_jobs", "error_code", "error_code TEXT");
+      addColumnIfMissing(db, "package_runs", "error_code", "error_code TEXT");
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS usage_counters (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+          counter_key TEXT NOT NULL,
+          usage_date TEXT NOT NULL,
+          units INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(case_id, counter_key, usage_date)
+        );
+        CREATE INDEX IF NOT EXISTS idx_usage_counters_case_key ON usage_counters(case_id, counter_key, usage_date);
+      `);
+    }
   }
 ];

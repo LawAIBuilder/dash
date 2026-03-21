@@ -32,7 +32,10 @@ function assertRuntimeCompatibility(db: Database.Database) {
       "updated_at"
     ],
     canonical_pages: ["ocr_status", "extraction_status", "updated_at"],
-    sync_runs: ["warning_message"]
+    sync_runs: ["warning_message"],
+    ai_jobs: ["error_code"],
+    package_runs: ["error_code"],
+    usage_counters: ["counter_key", "usage_date", "units"]
   };
 
   const missingByTable = Object.entries(requiredColumns)

@@ -897,6 +897,7 @@ export interface AIJob {
   input_json: string | null;
   output_json: string | null;
   error_message: string | null;
+  error_code: string | null;
   model: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
@@ -986,6 +987,7 @@ export interface PackageRun {
   output_json: string | null;
   citations_json: string | null;
   error_message: string | null;
+  error_code: string | null;
   model: string | null;
   prompt_tokens: number | null;
   completion_tokens: number | null;
