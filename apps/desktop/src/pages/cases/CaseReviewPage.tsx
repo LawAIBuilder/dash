@@ -5,9 +5,10 @@ import { AlertTriangle, CheckCircle2, FileWarning } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { PdfPreviewDialog } from "@/components/documents/PdfPreviewDialog";
 import { previewFile } from "@/lib/api-client";
+import { useDocumentTypes } from "@/hooks/useDocumentTypes";
 import { useOverrideClassification, useResolveOcrReview, useReviewQueue } from "@/hooks/useReviewQueue";
 import { formatDateTime, formatLabel, truncateMiddle } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
@@ -15,6 +16,7 @@ import { PageSkeleton } from "@/components/case/PageSkeleton";
 export function CaseReviewPage() {
   const { caseId } = useParams();
   const { data, isLoading, error } = useReviewQueue(caseId);
+  const documentTypes = useDocumentTypes();
   const resolveReview = useResolveOcrReview(caseId);
   const overrideClassification = useOverrideClassification(caseId);
   const [preview, setPreview] = useState<{ title: string; file: Blob | null; open: boolean }>({
@@ -181,13 +183,23 @@ export function CaseReviewPage() {
                     <div className="mt-1 text-xs text-muted-foreground">Canonical {truncateMiddle(item.canonical_document_id)}</div>
                   ) : null}
                 </div>
-                <Input
-                  placeholder="Document type ID"
+                <Select
                   value={overrideInput[item.source_item_id] ?? ""}
-                  onChange={(event) =>
-                    setOverrideInput((current) => ({ ...current, [item.source_item_id]: event.target.value }))
+                  onValueChange={(value) =>
+                    setOverrideInput((current) => ({ ...current, [item.source_item_id]: value }))
                   }
-                />
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose document type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {documentTypes.data?.map((documentType) => (
+                      <SelectItem key={documentType.id} value={documentType.id}>
+                        {formatLabel(documentType.canonical_name)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <div className="flex gap-2">
                   <Button
                     disabled={!overrideInput[item.source_item_id]?.trim()}

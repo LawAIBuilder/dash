@@ -86,33 +86,63 @@ export function CaseListPage() {
               <DialogTitle>Create case</DialogTitle>
             </DialogHeader>
             <div className="grid gap-3 py-2">
-              <Input
-                placeholder="Matter name"
-                value={form.name}
-                onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-              />
-              <Input
-                placeholder="Box Client File folder ID"
-                value={form.box_root_folder_id}
-                onChange={(event) =>
-                  setForm((current) => ({ ...current, box_root_folder_id: event.target.value }))
-                }
-              />
-              <Input
-                placeholder="Employee name"
-                value={form.employee_name}
-                onChange={(event) => setForm((current) => ({ ...current, employee_name: event.target.value }))}
-              />
-              <Input
-                placeholder="Employer name"
-                value={form.employer_name}
-                onChange={(event) => setForm((current) => ({ ...current, employer_name: event.target.value }))}
-              />
-              <Input
-                placeholder="Hearing date (YYYY-MM-DD)"
-                value={form.hearing_date}
-                onChange={(event) => setForm((current) => ({ ...current, hearing_date: event.target.value }))}
-              />
+              <div className="grid gap-2">
+                <label htmlFor="case-name" className="text-sm font-medium">
+                  Matter name
+                </label>
+                <Input
+                  id="case-name"
+                  placeholder="Matter name"
+                  value={form.name}
+                  onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <label htmlFor="case-box-root" className="text-sm font-medium">
+                  Box Client File folder ID
+                </label>
+                <Input
+                  id="case-box-root"
+                  placeholder="Box Client File folder ID"
+                  value={form.box_root_folder_id}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, box_root_folder_id: event.target.value }))
+                  }
+                />
+              </div>
+              <div className="grid gap-2">
+                <label htmlFor="case-employee-name" className="text-sm font-medium">
+                  Employee name
+                </label>
+                <Input
+                  id="case-employee-name"
+                  placeholder="Employee name"
+                  value={form.employee_name}
+                  onChange={(event) => setForm((current) => ({ ...current, employee_name: event.target.value }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <label htmlFor="case-employer-name" className="text-sm font-medium">
+                  Employer name
+                </label>
+                <Input
+                  id="case-employer-name"
+                  placeholder="Employer name"
+                  value={form.employer_name}
+                  onChange={(event) => setForm((current) => ({ ...current, employer_name: event.target.value }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <label htmlFor="case-hearing-date" className="text-sm font-medium">
+                  Hearing date
+                </label>
+                <Input
+                  id="case-hearing-date"
+                  placeholder="YYYY-MM-DD"
+                  value={form.hearing_date}
+                  onChange={(event) => setForm((current) => ({ ...current, hearing_date: event.target.value }))}
+                />
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setOpen(false)}>
@@ -131,8 +161,17 @@ export function CaseListPage() {
           <CardTitle>All matters</CardTitle>
           <CardDescription>Each row shows Box sync health and top-level hearing context.</CardDescription>
           <div className="relative max-w-sm">
+            <label className="sr-only" htmlFor="case-search">
+              Search matters
+            </label>
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input className="pl-9" placeholder="Search matters…" value={search} onChange={(e) => setSearch(e.target.value)} />
+            <Input
+              id="case-search"
+              className="pl-9"
+              placeholder="Search matters…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
         </CardHeader>
         <CardContent>
@@ -164,7 +203,15 @@ export function CaseListPage() {
                     <TableRow
                       key={item.id}
                       className="cursor-pointer"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => navigate(`/cases/${item.id}`)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          navigate(`/cases/${item.id}`);
+                        }
+                      }}
                     >
                       <TableCell>
                         <div className="font-medium">{item.name}</div>

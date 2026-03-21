@@ -763,5 +763,23 @@ export const authoritativeMigrations: AuthoritativeMigration[] = [
         CREATE INDEX IF NOT EXISTS idx_page_extractions_schema ON page_extractions(schema_key);
       `);
     }
+  },
+  {
+    id: "0008_worker_heartbeats",
+    description: "Track long-running worker health and heartbeat state",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS worker_heartbeats (
+          worker_name TEXT PRIMARY KEY,
+          status TEXT NOT NULL,
+          last_heartbeat_at TEXT NOT NULL,
+          last_started_at TEXT,
+          last_stopped_at TEXT,
+          last_error_message TEXT,
+          last_processed_count INTEGER DEFAULT 0,
+          metadata_json TEXT
+        );
+      `);
+    }
   }
 ];

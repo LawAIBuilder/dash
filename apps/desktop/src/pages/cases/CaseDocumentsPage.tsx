@@ -12,7 +12,7 @@ import { PdfPreviewDialog } from "@/components/documents/PdfPreviewDialog";
 import { useCaseActions } from "@/hooks/useCaseActions";
 import { useDocumentTable } from "@/hooks/useDocumentTable";
 import { useProjection } from "@/hooks/useProjection";
-import { previewFile } from "@/lib/api-client";
+import { previewFile, queueOcr } from "@/lib/api-client";
 import { formatDateTime, formatLabel } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
 
@@ -49,6 +49,18 @@ export function CaseDocumentsPage() {
       toast.success("OCR jobs queued");
     } catch (queueError) {
       toast.error(queueError instanceof Error ? queueError.message : "Queue OCR failed");
+    }
+  }
+
+  async function queueDocumentOcr(canonicalDocumentId: string) {
+    if (!caseId) {
+      return;
+    }
+    try {
+      await queueOcr(caseId, { canonical_document_id: canonicalDocumentId, force_rerun: true });
+      toast.success("Document OCR re-queued");
+    } catch (queueError) {
+      toast.error(queueError instanceof Error ? queueError.message : "Document OCR re-queue failed");
     }
   }
 
@@ -149,18 +161,27 @@ export function CaseDocumentsPage() {
                       <TableCell>{row.pageCount}</TableCell>
                       <TableCell>{formatDateTime(row.updatedAt)}</TableCell>
                       <TableCell>
-                        {row.sourceItemId ? (
+                        <div className="flex flex-wrap gap-2">
+                          {row.sourceItemId ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={previewLoadingId === row.sourceItemId}
+                              onClick={() => void openPreview(row.sourceItemId!, row.title)}
+                            >
+                              {previewLoadingId === row.sourceItemId ? "Loading…" : "Preview"}
+                            </Button>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No file</span>
+                          )}
                           <Button
                             size="sm"
                             variant="outline"
-                            disabled={previewLoadingId === row.sourceItemId}
-                            onClick={() => void openPreview(row.sourceItemId!, row.title)}
+                            onClick={() => void queueDocumentOcr(row.canonicalDocumentId)}
                           >
-                            {previewLoadingId === row.sourceItemId ? "Loading…" : "Preview"}
+                            Re-queue OCR
                           </Button>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">No file</span>
-                        )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}

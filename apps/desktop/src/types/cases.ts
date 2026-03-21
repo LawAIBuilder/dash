@@ -81,3 +81,13 @@ export interface ProjectionCacheEntry {
   watermark: ProjectionWatermark;
   viewSource: "cache" | "remote";
 }
+
+export interface DocumentTypeListItem {
+  id: string;
+  canonical_name: string;
+  category: string;
+  hearing_relevance?: string | null;
+  exhibit_policy?: string | null;
+  exhibit_eligible?: number | null;
+  mandatory_vlm_ocr?: number | null;
+}

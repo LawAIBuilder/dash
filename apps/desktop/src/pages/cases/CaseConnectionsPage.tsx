@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { useProjection } from "@/hooks/useProjection";
 import { useCaseActions } from "@/hooks/useCaseActions";
-import { useProbeBoxJwt } from "@/hooks/useConnections";
+import { useOcrWorkerHealth, useProbeBoxJwt } from "@/hooks/useConnections";
 import { useCaseDetail, useUpdateCase } from "@/hooks/useCaseDetail";
 import { formatDateTime, formatLabel, truncateMiddle } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
@@ -18,6 +18,7 @@ export function CaseConnectionsPage() {
   const { projection, error, isLoading } = useProjection(caseId);
   const { syncMutation } = useCaseActions(caseId);
   const probeMutation = useProbeBoxJwt(caseId);
+  const workerHealth = useOcrWorkerHealth();
   const caseDetail = useCaseDetail(caseId);
   const updateCaseMutation = useUpdateCase(caseId);
   const [rootFolderId, setRootFolderId] = useState("");
@@ -171,9 +172,57 @@ export function CaseConnectionsPage() {
                 </div>
               </>
             ) : (
-              <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-                No Box connection has been established for this matter yet.
-              </div>
+              <>
+                <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+                  No Box connection has been established for this matter yet. Set the root folder, probe JWT access, and run the first sync from here.
+                </div>
+                <div className="space-y-2 rounded-lg border p-4">
+                  <div className="text-sm text-muted-foreground">Matter Box root folder</div>
+                  <div className="flex gap-2">
+                    <Input value={rootFolderId} onChange={(event) => setRootFolderId(event.target.value)} />
+                    <Button
+                      variant="outline"
+                      disabled={updateCaseMutation.isPending}
+                      onClick={() => void saveRootFolder()}
+                    >
+                      {updateCaseMutation.isPending ? "Saving…" : "Save"}
+                    </Button>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Use the matter's Client File folder ID. Save it here before the first sync.
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    disabled={probeMutation.isPending}
+                    onClick={() =>
+                      void probeMutation
+                        .mutateAsync()
+                        .then(() => toast.success("Box JWT probe succeeded"))
+                        .catch((probeError) =>
+                          toast.error(probeError instanceof Error ? probeError.message : "JWT probe failed")
+                        )
+                    }
+                  >
+                    {probeMutation.isPending ? "Probing…" : "Probe JWT"}
+                  </Button>
+                  <Button
+                    disabled={syncMutation.isPending}
+                    onClick={() =>
+                      void syncMutation
+                        .mutateAsync()
+                        .then(() => toast.success("Box sync completed"))
+                        .catch((syncError) =>
+                          toast.error(syncError instanceof Error ? syncError.message : "Box sync failed")
+                        )
+                    }
+                  >
+                    <FolderSync className="mr-2 size-4" />
+                    {syncMutation.isPending ? "Syncing…" : "Sync Box now"}
+                  </Button>
+                </div>
+              </>
             )}
           </CardContent>
         </Card>
@@ -199,10 +248,38 @@ export function CaseConnectionsPage() {
                   <div className="mt-1 text-2xl font-semibold">{reviewPages}</div>
                 </div>
               </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-lg border p-4">
+                  <div className="text-sm text-muted-foreground">Worker state</div>
+                  <div className="mt-1 font-medium">
+                    {workerHealth.data?.worker
+                      ? formatLabel(workerHealth.data.worker.status)
+                      : "Unavailable"}
+                  </div>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <div className="text-sm text-muted-foreground">Last heartbeat</div>
+                  <div className="mt-1 font-medium">
+                    {workerHealth.data?.worker?.last_heartbeat_at
+                      ? formatDateTime(workerHealth.data.worker.last_heartbeat_at)
+                      : "No heartbeat"}
+                  </div>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <div className="text-sm text-muted-foreground">Worker health</div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <Badge variant={workerHealth.data?.stale ? "destructive" : "outline"}>
+                      {workerHealth.data?.stale ? "Stale" : "Healthy"}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
               <div className="rounded-lg border bg-muted/40 p-4 text-sm text-muted-foreground">
-                {queuedPages > 0 || processingPages > 0
-                  ? "The API can queue OCR from the UI, but you still need the OCR worker process running in production to drain those jobs."
-                  : "No queued OCR backlog is visible for this matter."}
+                {workerHealth.data?.worker?.last_error_message
+                  ? `Worker error: ${workerHealth.data.worker.last_error_message}`
+                  : queuedPages > 0 || processingPages > 0
+                    ? "Queued OCR is visible and the shared worker heartbeat is being monitored here."
+                    : "No queued OCR backlog is visible for this matter."}
               </div>
             </CardContent>
           </Card>

@@ -8,6 +8,7 @@ import type {
 
 export type DocumentTableRow = {
   id: string;
+  canonicalDocumentId: string;
   title: string;
   documentType: string | null;
   category: string | null;
@@ -38,7 +39,7 @@ export function useDocumentTable(projection: MatterProjection | null) {
       return [];
     }
 
-    const sourceItems = projection.slices.document_inventory_slice.source_items;
+    const sourceItems = projection.slices.document_inventory_slice?.source_items ?? [];
     const sourceItemsByCanonicalId = new Map<string, ProjectionSourceItem>();
     for (const item of sourceItems) {
       if (item.canonical_document_id) {
@@ -67,6 +68,7 @@ export function useDocumentTable(projection: MatterProjection | null) {
       const documentPages = pagesByDoc.get(document.id) ?? [];
       return {
         id: document.id,
+        canonicalDocumentId: document.id,
         title: document.title ?? sourceItem?.title ?? "Untitled document",
         documentType: document.document_type_name ?? sourceItem?.document_type_name ?? null,
         category: sourceItem?.document_category ?? null,

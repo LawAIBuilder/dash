@@ -5,7 +5,7 @@ import { CaseDocumentsPage } from "@/pages/cases/CaseDocumentsPage";
 import { CaseListPage } from "@/pages/cases/CaseListPage";
 import { CaseOverviewPage } from "@/pages/cases/CaseOverviewPage";
 import { CaseReviewPage } from "@/pages/cases/CaseReviewPage";
-import { LegacyDashboardPage } from "@/pages/LegacyDashboardPage";
+import { RouteErrorPage } from "@/pages/RouteErrorPage";
 
 export const router = createBrowserRouter([
   {
@@ -15,6 +15,7 @@ export const router = createBrowserRouter([
   {
     path: "/",
     element: <AppShell />,
+    errorElement: <RouteErrorPage />,
     children: [
       {
         path: "cases",
@@ -37,9 +38,5 @@ export const router = createBrowserRouter([
         element: <CaseConnectionsPage />
       }
     ]
-  },
-  {
-    path: "/legacy",
-    element: <LegacyDashboardPage />
   }
 ]);

@@ -1,5 +1,5 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { probeBoxJwt } from "@/lib/api-client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { getOcrWorkerHealth, probeBoxJwt } from "@/lib/api-client";
 
 export function useProbeBoxJwt(caseId: string | null | undefined) {
   const queryClient = useQueryClient();
@@ -12,5 +12,13 @@ export function useProbeBoxJwt(caseId: string | null | undefined) {
         queryClient.invalidateQueries({ queryKey: ["projection", normalizedCaseId] })
       ]);
     }
+  });
+}
+
+export function useOcrWorkerHealth() {
+  return useQuery({
+    queryKey: ["ocr-worker-health"],
+    queryFn: getOcrWorkerHealth,
+    refetchInterval: 15_000
   });
 }

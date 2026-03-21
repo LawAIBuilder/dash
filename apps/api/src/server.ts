@@ -39,11 +39,19 @@ import {
   readPracticePantherConfig
 } from "./pp-provider.js";
 import { seedFoundation } from "./seed.js";
+import { readWorkerHealth } from "./worker-health.js";
 
 const db = openDatabase();
 seedFoundation(db);
 
 const app = Fastify({ logger: true });
+app.setErrorHandler((error, _request, reply) => {
+  app.log.error(error);
+  reply.code(500).send({
+    ok: false,
+    error: error instanceof Error ? error.message : "Internal server error"
+  });
+});
 
 const configuredOrigins = process.env.WC_CORS_ORIGIN?.split(",")
   .map((origin) => origin.trim())
@@ -66,11 +74,36 @@ if (WC_API_KEY) {
   });
 }
 
+const ENABLE_DEV_ROUTES =
+  process.env.WC_ENABLE_DEV_ROUTES === "1" || process.env.NODE_ENV !== "production";
+
+app.addHook("onRequest", async (request, reply) => {
+  const path = request.url.split("?")[0] ?? "";
+  if (!ENABLE_DEV_ROUTES && path.startsWith("/dev/")) {
+    return reply.code(404).send({ ok: false, error: "Not found" });
+  }
+});
+
 app.get("/health", async () => ({
   ok: true,
   service: "wc-authoritative-api",
   seeded_at_startup: true
 }));
+
+app.get("/api/workers/ocr/health", async () => {
+  const health = readWorkerHealth(db, "ocr");
+  const now = Date.now();
+  const heartbeatTime = health ? new Date(health.last_heartbeat_at).getTime() : 0;
+  const ageMs = heartbeatTime > 0 ? Math.max(0, now - heartbeatTime) : null;
+  const stale = ageMs === null ? true : ageMs > 45_000;
+
+  return {
+    ok: true,
+    worker: health,
+    stale,
+    age_ms: ageMs
+  };
+});
 
 app.get("/api/cases", async () => {
   const cases = db
@@ -122,6 +155,21 @@ app.get("/api/cases", async () => {
     .all();
 
   return { cases };
+});
+
+app.get("/api/document-types", async () => {
+  const rows = db
+    .prepare(
+      `
+        SELECT id, canonical_name, category, hearing_relevance, exhibit_policy, exhibit_eligible, mandatory_vlm_ocr
+        FROM document_types
+        WHERE active = 1
+        ORDER BY category ASC, canonical_name ASC
+      `
+    )
+    .all();
+
+  return { document_types: rows };
 });
 
 app.post("/api/cases", async (request, reply) => {
@@ -211,17 +259,61 @@ app.patch("/api/cases/:caseId", async (request, reply) => {
     return reply.code(404).send({ ok: false, error: "case not found" });
   }
 
-  ensureCaseScaffold(db, {
-    caseId,
-    name: body?.name,
-    caseType: body?.case_type,
-    ppMatterId: body?.pp_matter_id ?? null,
-    boxRootFolderId: body?.box_root_folder_id ?? null,
-    employeeName: body?.employee_name ?? null,
-    employerName: body?.employer_name ?? null,
-    insurerName: body?.insurer_name ?? null,
-    hearingDate: body?.hearing_date ?? null
-  });
+  const patch = body ?? {};
+  const updates: string[] = [];
+  const params: Array<string | null> = [];
+
+  if (Object.hasOwn(patch, "name")) {
+    const nextName = patch.name?.trim();
+    if (!nextName) {
+      return reply.code(400).send({ ok: false, error: "name cannot be empty" });
+    }
+    updates.push("name = ?");
+    params.push(nextName);
+  }
+  if (Object.hasOwn(patch, "case_type")) {
+    const nextType = patch.case_type?.trim();
+    if (!nextType) {
+      return reply.code(400).send({ ok: false, error: "case_type cannot be empty" });
+    }
+    updates.push("case_type = ?");
+    params.push(nextType);
+  }
+  if (Object.hasOwn(patch, "pp_matter_id")) {
+    updates.push("pp_matter_id = ?");
+    params.push(patch.pp_matter_id ?? null);
+  }
+  if (Object.hasOwn(patch, "box_root_folder_id")) {
+    updates.push("box_root_folder_id = ?");
+    params.push(patch.box_root_folder_id ?? null);
+  }
+  if (Object.hasOwn(patch, "employee_name")) {
+    updates.push("employee_name = ?");
+    params.push(patch.employee_name ?? null);
+  }
+  if (Object.hasOwn(patch, "employer_name")) {
+    updates.push("employer_name = ?");
+    params.push(patch.employer_name ?? null);
+  }
+  if (Object.hasOwn(patch, "insurer_name")) {
+    updates.push("insurer_name = ?");
+    params.push(patch.insurer_name ?? null);
+  }
+  if (Object.hasOwn(patch, "hearing_date")) {
+    updates.push("hearing_date = ?");
+    params.push(patch.hearing_date ?? null);
+  }
+
+  if (updates.length > 0) {
+    db.prepare(
+      `
+        UPDATE cases
+        SET ${updates.join(", ")},
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `
+    ).run(...params, caseId);
+  }
 
   const row = db
     .prepare(
@@ -868,6 +960,9 @@ app.post("/api/cases/:caseId/normalize-documents", async (request, reply) => {
   if (!caseExists) {
     return reply.code(404).send({ ok: false, error: "case not found" });
   }
+  if (body?.source_item_ids && body.source_item_ids.length > 1000) {
+    return reply.code(400).send({ ok: false, error: "source_item_ids may not exceed 1000 items" });
+  }
 
   return normalizeCaseDocumentSpine(db, {
     caseId,
@@ -982,6 +1077,9 @@ app.post("/api/cases/:caseId/ocr/queue", async (request, reply) => {
     | undefined;
   if (!caseExists) {
     return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+  if (body?.canonical_page_ids && body.canonical_page_ids.length > 1000) {
+    return reply.code(400).send({ ok: false, error: "canonical_page_ids may not exceed 1000 items" });
   }
 
   return db.transaction(() =>
@@ -1214,9 +1312,14 @@ app.post("/dev/regression-check", async (request, reply) => {
 
 const port = Number(process.env.PORT ?? 4000);
 const host = process.env.WC_API_HOST?.trim() || "127.0.0.1";
-try {
-  await app.listen({ port, host });
-} catch (error) {
-  app.log.error(error);
-  process.exit(1);
+
+export { app };
+
+if (process.env.WC_SKIP_LISTEN !== "1") {
+  try {
+    await app.listen({ port, host });
+  } catch (error) {
+    app.log.error(error);
+    process.exit(1);
+  }
 }

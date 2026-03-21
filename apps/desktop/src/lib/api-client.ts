@@ -1,6 +1,11 @@
 import type { MatterProjection, ProjectionWatermark } from "@wc/domain-core";
 import { API_BASE, buildApiHeaders } from "@/config";
-import type { CaseListItem, CreateCaseInput, ReviewQueueResponse } from "@/types/cases";
+import type {
+  CaseListItem,
+  CreateCaseInput,
+  DocumentTypeListItem,
+  ReviewQueueResponse
+} from "@/types/cases";
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
@@ -24,6 +29,14 @@ export async function listCases(): Promise<CaseListItem[]> {
   });
   const payload = await readJson<{ cases: CaseListItem[] }>(response);
   return payload.cases;
+}
+
+export async function listDocumentTypes(): Promise<DocumentTypeListItem[]> {
+  const response = await fetch(apiUrl("/api/document-types"), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ document_types: DocumentTypeListItem[] }>(response);
+  return payload.document_types;
 }
 
 export async function createCase(input: CreateCaseInput): Promise<CaseListItem> {
@@ -149,4 +162,25 @@ export function buildWatermark(caseId: string, projection: MatterProjection, pre
     last_pull_at: new Date().toISOString(),
     last_push_at: previous?.last_push_at ?? null
   };
+}
+
+export async function getOcrWorkerHealth() {
+  const response = await fetch(apiUrl("/api/workers/ocr/health"), {
+    headers: buildApiHeaders()
+  });
+  return readJson<{
+    ok: true;
+    worker: {
+      worker_name: string;
+      status: string;
+      last_heartbeat_at: string;
+      last_started_at: string | null;
+      last_stopped_at: string | null;
+      last_error_message: string | null;
+      last_processed_count: number;
+      metadata_json: string | null;
+    } | null;
+    stale: boolean;
+    age_ms: number | null;
+  }>(response);
 }

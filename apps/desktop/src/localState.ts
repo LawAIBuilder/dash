@@ -23,6 +23,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isStoredMatterProjection(value: unknown): value is StoredMatterProjection {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (typeof value.case_id !== "string" || typeof value.fetched_at !== "string") {
+    return false;
+  }
+  if (!isRecord(value.projection) || typeof value.projection.snapshot_id !== "string" || !isRecord(value.projection.slices)) {
+    return false;
+  }
+  if (
+    !isRecord(value.watermark) ||
+    typeof value.watermark.case_id !== "string" ||
+    typeof value.watermark.authoritative_snapshot_id !== "string"
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export function loadDesktopProjectionState(): DesktopProjectionState {
   if (typeof window === "undefined") {
     return EMPTY_STATE;
@@ -39,9 +59,18 @@ export function loadDesktopProjectionState(): DesktopProjectionState {
       return EMPTY_STATE;
     }
 
+    const matters: Record<string, StoredMatterProjection> = {};
+    if (isRecord(parsed.matters)) {
+      for (const [key, value] of Object.entries(parsed.matters)) {
+        if (isStoredMatterProjection(value)) {
+          matters[key] = value;
+        }
+      }
+    }
+
     return {
       active_case_id: typeof parsed.active_case_id === "string" ? parsed.active_case_id : "",
-      matters: isRecord(parsed.matters) ? (parsed.matters as Record<string, StoredMatterProjection>) : {}
+      matters
     };
   } catch {
     return EMPTY_STATE;

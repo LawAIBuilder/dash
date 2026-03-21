@@ -29,6 +29,18 @@ export type OcrWorkerLoopDeps = {
   ensureTesseract: () => Promise<TessWorker>;
 };
 
+export function requeueProcessingOcrAttempts(db: Database.Database) {
+  return db
+    .prepare(
+      `
+        UPDATE ocr_attempts
+        SET status = 'queued'
+        WHERE status = 'processing'
+      `
+    )
+    .run().changes;
+}
+
 export function claimQueuedOcrAttempt(db: Database.Database) {
   return db.transaction(() => {
     const row = db

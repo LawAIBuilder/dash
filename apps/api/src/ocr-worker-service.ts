@@ -3,10 +3,12 @@
  * Runs beside the API, polling the same SQLite DB on an interval.
  */
 import { openDatabase } from "./db.js";
-import { runOcrWorkerLoop } from "./ocr-worker.js";
+import { requeueProcessingOcrAttempts, runOcrWorkerLoop } from "./ocr-worker.js";
+import { writeWorkerHeartbeat } from "./worker-health.js";
 
 const db = openDatabase();
 
+const workerName = "ocr";
 const maxPasses = Number(process.env.OCR_WORKER_MAX_PASSES ?? 25);
 const intervalMs = Number(process.env.OCR_WORKER_INTERVAL_MS ?? 15000);
 
@@ -17,20 +19,42 @@ async function sleep(ms: number) {
 }
 
 async function main() {
+  const recovered = requeueProcessingOcrAttempts(db);
+  writeWorkerHeartbeat(db, {
+    workerName,
+    status: "starting",
+    processedCount: recovered,
+    metadata: { recovered_processing_attempts: recovered, interval_ms: intervalMs, max_passes: maxPasses }
+  });
+
   // eslint-disable-next-line no-console
   console.log(`OCR worker service started (maxPasses=${maxPasses}, intervalMs=${intervalMs}).`);
 
   while (!stopping) {
     try {
+      writeWorkerHeartbeat(db, {
+        workerName,
+        status: "processing"
+      });
       const { processed } = await runOcrWorkerLoop(
         db,
         Number.isFinite(maxPasses) ? maxPasses : 25
       );
+      writeWorkerHeartbeat(db, {
+        workerName,
+        status: "idle",
+        processedCount: processed
+      });
       if (processed > 0) {
         // eslint-disable-next-line no-console
         console.log(`OCR worker pass processed ${processed} attempt(s).`);
       }
     } catch (error) {
+      writeWorkerHeartbeat(db, {
+        workerName,
+        status: "error",
+        errorMessage: error instanceof Error ? error.message : "Unknown OCR worker error"
+      });
       // eslint-disable-next-line no-console
       console.error("OCR worker loop error", error);
     }
@@ -40,6 +64,12 @@ async function main() {
     }
   }
 
+  const recoveredOnStop = requeueProcessingOcrAttempts(db);
+  writeWorkerHeartbeat(db, {
+    workerName,
+    status: "stopped",
+    processedCount: recoveredOnStop
+  });
   db.close();
 }
 

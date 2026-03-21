@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "start:railway": "sh -c \"node apps/api/dist/ocr-worker-service.js & exec node apps/api/dist/server.js\"",
+    "start:railway": "node apps/api/dist/start-railway.js",
     "start": "node apps/api/dist/server.js",
     "build": "npm run build --workspace @wc/domain-core --workspace @wc/wc-rules --workspace @wc/wc-calculators && npm run build --workspace @wc/api --workspace @wc/desktop --if-present",
     "dev": "npm run dev --workspace @wc/api",
