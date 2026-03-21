@@ -29,13 +29,19 @@ export function writeWorkerHeartbeat(
   const existing = db
     .prepare(
       `
-        SELECT worker_name, last_started_at
+        SELECT worker_name, last_started_at, last_processed_count
         FROM worker_heartbeats
         WHERE worker_name = ?
         LIMIT 1
       `
     )
-    .get(input.workerName) as { worker_name: string; last_started_at: string | null } | undefined;
+    .get(input.workerName) as
+    | {
+        worker_name: string;
+        last_started_at: string | null;
+        last_processed_count: number | null;
+      }
+    | undefined;
 
   db.prepare(
     `
@@ -68,7 +74,7 @@ export function writeWorkerHeartbeat(
     input.status === "starting" ? timestamp : existing?.last_started_at ?? timestamp,
     input.status === "stopped" ? timestamp : null,
     input.errorMessage ?? null,
-    input.processedCount ?? 0,
+    input.processedCount ?? existing?.last_processed_count ?? 0,
     input.metadata ? JSON.stringify(input.metadata) : null
   );
 }
