@@ -4,8 +4,19 @@ import type {
   CaseListItem,
   CreateCaseInput,
   DocumentTypeListItem,
+  PracticePantherConnectionStatus,
+  PracticePantherMatterItem,
   ReviewQueueResponse
 } from "@/types/cases";
+import type {
+  ExhibitHistoryEntry,
+  ExhibitPacket,
+  ExhibitSuggestion,
+  ExhibitWorkspaceResponse,
+  PacketPdfExportLayout,
+  PacketPdfExportRow
+} from "@/types/exhibits";
+import type { UserDocumentTemplate, UserDocumentTemplateFill } from "@/types/document-templates";
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
@@ -88,6 +99,57 @@ export async function probeBoxJwt() {
     method: "POST",
     headers: buildApiHeaders({ "content-type": "application/json" }),
     body: JSON.stringify({})
+  });
+  return readJson<Record<string, unknown>>(response);
+}
+
+export async function getPracticePantherStatus() {
+  const response = await fetch(apiUrl("/api/connectors/practicepanther/status"), {
+    headers: buildApiHeaders()
+  });
+  return readJson<{
+    ok: true;
+    configured: boolean;
+    api_base_url: string;
+    redirect_uri: string | null;
+    connection: PracticePantherConnectionStatus | null;
+  }>(response);
+}
+
+export async function startPracticePantherAuth(input?: { account_label?: string; return_to?: string | null }) {
+  const response = await fetch(apiUrl("/api/connectors/practicepanther/auth/start"), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input ?? {})
+  });
+  return readJson<{
+    ok: true;
+    connection_id: string;
+    authorization_url: string;
+    redirect_uri: string | null;
+  }>(response);
+}
+
+export async function listPracticePantherMatters(searchText?: string) {
+  const url = new URL(apiUrl("/api/connectors/practicepanther/matters"), window.location.origin);
+  if (searchText?.trim()) {
+    url.searchParams.set("search_text", searchText.trim());
+  }
+  const response = await fetch(url.toString(), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ ok: true; matters: PracticePantherMatterItem[] }>(response);
+  return payload.matters;
+}
+
+export async function syncPracticePanther(caseId: string, input?: { pp_matter_id?: string | null }) {
+  const response = await fetch(apiUrl("/api/connectors/practicepanther/sync"), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      case_id: caseId,
+      pp_matter_id: input?.pp_matter_id ?? null
+    })
   });
   return readJson<Record<string, unknown>>(response);
 }
@@ -183,4 +245,347 @@ export async function getOcrWorkerHealth() {
     stale: boolean;
     age_ms: number | null;
   }>(response);
+}
+
+export async function getExhibitWorkspace(caseId: string): Promise<ExhibitPacket[]> {
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/exhibits`), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<ExhibitWorkspaceResponse>(response);
+  return payload.packets;
+}
+
+export async function createExhibitPacket(
+  caseId: string,
+  input?: { packet_name?: string; packet_mode?: "compact" | "full"; naming_scheme?: string }
+) {
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/exhibit-packets`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input ?? {})
+  });
+  return readJson<{ ok: true; case_id: string; packet: ExhibitPacket | null }>(response);
+}
+
+export async function updateExhibitPacket(
+  packetId: string,
+  input: { packet_name?: string; packet_mode?: "compact" | "full"; naming_scheme?: string; status?: string }
+) {
+  const response = await fetch(apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}`), {
+    method: "PATCH",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input)
+  });
+  return readJson<{ ok: true; packet: ExhibitPacket | null }>(response);
+}
+
+export async function createExhibitSlot(
+  sectionId: string,
+  input?: {
+    exhibit_label?: string | null;
+    title?: string | null;
+    purpose?: string | null;
+    objection_risk?: string | null;
+    notes?: string | null;
+  }
+) {
+  const response = await fetch(apiUrl(`/api/exhibit-sections/${encodeURIComponent(sectionId)}/exhibits`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input ?? {})
+  });
+  return readJson<{ ok: true; packet: ExhibitPacket | null }>(response);
+}
+
+export async function reorderExhibitSections(packetId: string, sectionIds: string[]) {
+  const response = await fetch(apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}/sections/reorder`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ section_ids: sectionIds })
+  });
+  return readJson<{ ok: true; packet: ExhibitPacket | null }>(response);
+}
+
+export async function reorderSectionExhibits(sectionId: string, exhibitIds: string[]) {
+  const response = await fetch(apiUrl(`/api/exhibit-sections/${encodeURIComponent(sectionId)}/exhibits/reorder`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ exhibit_ids: exhibitIds })
+  });
+  return readJson<{ ok: true; packet: ExhibitPacket | null }>(response);
+}
+
+export async function updateExhibitSlot(
+  exhibitId: string,
+  input: {
+    exhibit_label?: string | null;
+    title?: string | null;
+    status?: string | null;
+    purpose?: string | null;
+    objection_risk?: string | null;
+    notes?: string | null;
+  }
+) {
+  const response = await fetch(apiUrl(`/api/exhibits/${encodeURIComponent(exhibitId)}`), {
+    method: "PATCH",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input)
+  });
+  return readJson<{ ok: true; packet: ExhibitPacket | null }>(response);
+}
+
+export async function addExhibitItem(exhibitId: string, input: { source_item_id: string; notes?: string | null }) {
+  const response = await fetch(apiUrl(`/api/exhibits/${encodeURIComponent(exhibitId)}/items`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input)
+  });
+  return readJson<{ ok: true; packet: ExhibitPacket | null }>(response);
+}
+
+export async function removeExhibitItem(itemId: string) {
+  const response = await fetch(apiUrl(`/api/exhibit-items/${encodeURIComponent(itemId)}`), {
+    method: "DELETE",
+    headers: buildApiHeaders()
+  });
+  return readJson<{ ok: true; packet: ExhibitPacket | null }>(response);
+}
+
+export async function updateExhibitItemPageRules(itemId: string, excludeCanonicalPageIds: string[]) {
+  const response = await fetch(apiUrl(`/api/exhibit-items/${encodeURIComponent(itemId)}/page-rules`), {
+    method: "PATCH",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ exclude_canonical_page_ids: excludeCanonicalPageIds })
+  });
+  return readJson<{ ok: true; packet: ExhibitPacket | null }>(response);
+}
+
+export async function getExhibitSuggestions(packetId: string): Promise<ExhibitSuggestion[]> {
+  const response = await fetch(apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}/suggestions`), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ ok: true; suggestions: ExhibitSuggestion[] }>(response);
+  return payload.suggestions;
+}
+
+export async function resolveExhibitSuggestion(
+  packetId: string,
+  suggestionId: string,
+  input: { action: "accept" | "dismiss"; note?: string | null }
+) {
+  const response = await fetch(
+    apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}/suggestions/${encodeURIComponent(suggestionId)}/resolve`),
+    {
+      method: "POST",
+      headers: buildApiHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(input)
+    }
+  );
+  return readJson<{ ok: true; packet: ExhibitPacket | null }>(response);
+}
+
+export async function getExhibitHistory(packetId: string): Promise<ExhibitHistoryEntry[]> {
+  const response = await fetch(apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}/history`), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ ok: true; history: ExhibitHistoryEntry[] }>(response);
+  return payload.history;
+}
+
+export async function finalizeExhibitPacket(packetId: string) {
+  const response = await fetch(apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}/finalize`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({})
+  });
+  return readJson<{
+    ok: true;
+    packet: ExhibitPacket | null;
+    suggestions: ExhibitSuggestion[];
+    preview: Record<string, unknown> | null;
+  }>(response);
+}
+
+export async function listPacketPdfExports(packetId: string): Promise<PacketPdfExportRow[]> {
+  const response = await fetch(apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}/exports`), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ ok: true; exports: PacketPdfExportRow[] }>(response);
+  return payload.exports;
+}
+
+export async function generatePacketPdf(packetId: string, layout?: PacketPdfExportLayout) {
+  const response = await fetch(apiUrl(`/api/exhibit-packets/${encodeURIComponent(packetId)}/exports/packet-pdf`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(layout ?? {})
+  });
+  return readJson<{
+    ok: true;
+    export_id: string;
+    page_count: number;
+    manifest: unknown;
+    pdf_relative_path: string;
+  }>(response);
+}
+
+export async function downloadPacketExportPdf(exportId: string): Promise<Blob> {
+  const response = await fetch(apiUrl(`/api/exhibit-packet-exports/${encodeURIComponent(exportId)}/pdf`), {
+    headers: buildApiHeaders()
+  });
+  if (!response.ok) {
+    const err = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(typeof err.error === "string" ? err.error : `Download failed (${response.status})`);
+  }
+  return response.blob();
+}
+
+export async function listDocumentTemplates(caseId: string): Promise<UserDocumentTemplate[]> {
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/document-templates`), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ ok: true; templates: UserDocumentTemplate[] }>(response);
+  return payload.templates;
+}
+
+export async function createDocumentTemplate(
+  caseId: string,
+  input: {
+    name?: string;
+    description?: string | null;
+    body_markdown: string;
+    fields?: Array<{ name: string; label?: string; default?: string | null }>;
+    ai_hints?: string | null;
+  }
+): Promise<UserDocumentTemplate> {
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/document-templates`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify(input)
+  });
+  const payload = await readJson<{ ok: true; template: UserDocumentTemplate | null }>(response);
+  if (!payload.template) {
+    throw new Error("Template was not created");
+  }
+  return payload.template;
+}
+
+export async function updateDocumentTemplate(
+  caseId: string,
+  templateId: string,
+  input: {
+    name?: string | null;
+    description?: string | null;
+    body_markdown?: string | null;
+    fields?: Array<{ name: string; label?: string; default?: string | null }> | null;
+    ai_hints?: string | null;
+  }
+): Promise<UserDocumentTemplate> {
+  const response = await fetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/document-templates/${encodeURIComponent(templateId)}`),
+    {
+      method: "PATCH",
+      headers: buildApiHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(input)
+    }
+  );
+  const payload = await readJson<{ ok: true; template: UserDocumentTemplate | null }>(response);
+  if (!payload.template) {
+    throw new Error("Template was not updated");
+  }
+  return payload.template;
+}
+
+export async function deleteDocumentTemplate(caseId: string, templateId: string): Promise<void> {
+  const response = await fetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/document-templates/${encodeURIComponent(templateId)}`),
+    {
+      method: "DELETE",
+      headers: buildApiHeaders()
+    }
+  );
+  await readJson<{ ok: true }>(response);
+}
+
+export async function renderDocumentTemplate(
+  caseId: string,
+  templateId: string,
+  input: {
+    values: Record<string, string>;
+    body_markdown?: string | null;
+    save?: boolean;
+    source_item_id?: string | null;
+    status?: string | null;
+  }
+): Promise<{
+  rendered_markdown: string;
+  missing_placeholders: string[];
+  fill: UserDocumentTemplateFill | null;
+}> {
+  const response = await fetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/document-templates/${encodeURIComponent(templateId)}/render`),
+    {
+      method: "POST",
+      headers: buildApiHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(input)
+    }
+  );
+  return readJson<{
+    ok: true;
+    rendered_markdown: string;
+    missing_placeholders: string[];
+    fill: UserDocumentTemplateFill | null;
+  }>(response);
+}
+
+export async function listDocumentTemplateFills(caseId: string, templateId?: string): Promise<UserDocumentTemplateFill[]> {
+  const q = templateId ? `?template_id=${encodeURIComponent(templateId)}` : "";
+  const response = await fetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/document-template-fills${q}`), {
+    headers: buildApiHeaders()
+  });
+  const payload = await readJson<{ ok: true; fills: UserDocumentTemplateFill[] }>(response);
+  return payload.fills;
+}
+
+export async function getDocumentTemplateFill(caseId: string, fillId: string): Promise<UserDocumentTemplateFill> {
+  const response = await fetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/document-template-fills/${encodeURIComponent(fillId)}`),
+    {
+      headers: buildApiHeaders()
+    }
+  );
+  const payload = await readJson<{ ok: true; fill: UserDocumentTemplateFill }>(response);
+  return payload.fill;
+}
+
+export async function deleteDocumentTemplateFill(caseId: string, fillId: string): Promise<void> {
+  const response = await fetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/document-template-fills/${encodeURIComponent(fillId)}`),
+    {
+      method: "DELETE",
+      headers: buildApiHeaders()
+    }
+  );
+  await readJson<{ ok: true }>(response);
+}
+
+export async function updateDocumentTemplateFill(
+  caseId: string,
+  fillId: string,
+  input: {
+    values?: Record<string, string> | null;
+    rendered_markdown?: string | null;
+    status?: string | null;
+  }
+): Promise<UserDocumentTemplateFill> {
+  const response = await fetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/document-template-fills/${encodeURIComponent(fillId)}`),
+    {
+      method: "PATCH",
+      headers: buildApiHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(input)
+    }
+  );
+  const payload = await readJson<{ ok: true; fill: UserDocumentTemplateFill }>(response);
+  return payload.fill;
 }

@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useParams } from "react-router-dom";
-import { FileText, FolderOpen, Home, Link2, ListChecks, RefreshCw } from "lucide-react";
+import { FileText, FolderOpen, Home, LayoutTemplate, Link2, ListChecks, RefreshCw, Rows3 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,8 @@ const matterNav = [
   { to: "", label: "Overview", icon: Home },
   { to: "documents", label: "Documents", icon: FolderOpen },
   { to: "review", label: "Review Queue", icon: ListChecks },
+  { to: "exhibits", label: "Exhibits", icon: Rows3 },
+  { to: "templates", label: "Templates", icon: LayoutTemplate },
   { to: "connections", label: "Connections", icon: Link2 }
 ];
 

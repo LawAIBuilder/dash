@@ -1,7 +1,38 @@
 import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { Buffer } from "node:buffer";
+import { readFile } from "node:fs/promises";
 import { openDatabase } from "./db.js";
+import {
+  addExhibitItem,
+  createExhibit,
+  createExhibitPacket,
+  createExhibitSection,
+  deleteExhibit,
+  deleteExhibitSection,
+  finalizeExhibitPacket,
+  getCaseExhibitWorkspace,
+  getPacketCaseId,
+  getPacketHistory,
+  getPacketPreview,
+  getSectionCaseId,
+  getPacketSuggestions,
+  removeExhibitItem,
+  reorderExhibitsInSection,
+  reorderExhibitSections,
+  resolveExhibitSuggestion,
+  updateExhibit,
+  updateExhibitItemPageRules,
+  updateExhibitPacket,
+  updateExhibitSection
+} from "./exhibits.js";
+import {
+  getPacketExportRow,
+  listPacketExportsForPacket,
+  parsePacketPdfExportOptions,
+  resolveExportAbsolutePath,
+  runPacketPdfExport
+} from "./packet-pdf.js";
 import { appendPageExtraction } from "./extraction.js";
 import { runCaseHeuristicExtractions } from "./extraction-runner.js";
 import {
@@ -34,15 +65,85 @@ import {
 } from "./runtime.js";
 import {
   PRACTICE_PANTHER_SYNC_DEFERRED_MESSAGE,
+  buildPracticePantherAuthorizationUrl,
+  buildPracticePantherMatterPatch,
+  buildPracticePantherSyncCursorValue,
+  exchangePracticePantherAuthorizationCode,
+  extractPracticePantherCustomFields,
+  fetchPracticePantherAccountById,
+  fetchPracticePantherCallLogs,
+  fetchPracticePantherContacts,
+  fetchPracticePantherCurrentUser,
+  fetchPracticePantherEmails,
+  fetchPracticePantherEvents,
+  fetchPracticePantherMatterById,
+  fetchPracticePantherMatters,
+  fetchPracticePantherNotes,
+  fetchPracticePantherRelationships,
+  fetchPracticePantherTasks,
   isPracticePantherOAuthReady,
   isPracticePantherProductionSyncConfigured,
+  mergePracticePantherConnectionMetadata,
+  parsePracticePantherConnectionMetadata,
+  refreshPracticePantherAccessToken,
   readPracticePantherConfig
 } from "./pp-provider.js";
 import { seedFoundation } from "./seed.js";
 import { readWorkerHealth } from "./worker-health.js";
+import {
+  MAX_TEMPLATE_BODY_MARKDOWN,
+  buildFieldsForRender,
+  createUserDocumentTemplate,
+  deleteTemplateFill,
+  deleteUserDocumentTemplate,
+  getTemplateFill,
+  getUserDocumentTemplate,
+  listTemplateFills,
+  listUserDocumentTemplates,
+  renderUserTemplate,
+  saveTemplateFill,
+  serializeUserDocumentFill,
+  serializeUserDocumentTemplate,
+  updateTemplateFill,
+  updateUserDocumentTemplate,
+  validateValuesPayload
+} from "./document-templates.js";
 
 const db = openDatabase();
 seedFoundation(db);
+
+async function fetchBoxPdfBytesForSourceItem(sourceItemId: string): Promise<Buffer> {
+  const config = resolveBoxProviderConfig();
+  if (!config) {
+    throw new Error("BOX_JWT_CONFIG_JSON or BOX_JWT_CONFIG_FILE must be configured");
+  }
+  const sourceItem = db
+    .prepare(
+      `
+        SELECT provider, remote_id, title, mime_type
+        FROM source_items
+        WHERE id = ?
+        LIMIT 1
+      `
+    )
+    .get(sourceItemId) as
+    | {
+        provider: string;
+        remote_id: string;
+        title: string | null;
+        mime_type: string | null;
+      }
+    | undefined;
+  if (!sourceItem) {
+    throw new Error(`source item not found: ${sourceItemId}`);
+  }
+  if (sourceItem.provider !== "box") {
+    throw new Error("packet PDF export currently supports Box source files only");
+  }
+  const { client } = createBoxClient(config);
+  const buffer = await downloadBoxFileContent(client, sourceItem.remote_id);
+  return Buffer.from(buffer);
+}
 
 const app = Fastify({ logger: true });
 app.setErrorHandler((error, _request, reply) => {
@@ -64,7 +165,11 @@ const WC_API_KEY = process.env.WC_API_KEY?.trim();
 if (WC_API_KEY) {
   app.addHook("onRequest", async (request, reply) => {
     const path = request.url.split("?")[0] ?? "";
-    if (request.method === "OPTIONS" || path === "/health") {
+    if (
+      request.method === "OPTIONS" ||
+      path === "/health" ||
+      path === "/api/connectors/practicepanther/callback"
+    ) {
       return;
     }
     const auth = request.headers.authorization;
@@ -76,6 +181,228 @@ if (WC_API_KEY) {
 
 const ENABLE_DEV_ROUTES =
   process.env.WC_ENABLE_DEV_ROUTES === "1" || process.env.NODE_ENV !== "production";
+
+function parseMetadataRecord(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function readSourceConnectionByProvider(provider: "box" | "practicepanther") {
+  return db
+    .prepare(
+      `
+        SELECT
+          id,
+          provider,
+          account_label,
+          auth_mode,
+          status,
+          scopes,
+          callback_state,
+          authorization_url,
+          metadata_json,
+          external_account_id,
+          last_error_message,
+          last_verified_at,
+          updated_at,
+          created_at
+        FROM source_connections
+        WHERE provider = ?
+        ORDER BY created_at ASC
+        LIMIT 1
+      `
+    )
+    .get(provider) as
+    | {
+        id: string;
+        provider: string;
+        account_label: string | null;
+        auth_mode: string;
+        status: string;
+        scopes: string | null;
+        callback_state: string | null;
+        authorization_url: string | null;
+        metadata_json: string | null;
+        external_account_id: string | null;
+        last_error_message: string | null;
+        last_verified_at: string | null;
+        updated_at: string | null;
+        created_at: string | null;
+      }
+    | undefined;
+}
+
+function readSourceConnectionByCallbackState(provider: "box" | "practicepanther", callbackState: string) {
+  return db
+    .prepare(
+      `
+        SELECT
+          id,
+          provider,
+          account_label,
+          auth_mode,
+          status,
+          scopes,
+          callback_state,
+          authorization_url,
+          metadata_json,
+          external_account_id,
+          last_error_message,
+          last_verified_at,
+          updated_at,
+          created_at
+        FROM source_connections
+        WHERE provider = ?
+          AND callback_state = ?
+        LIMIT 1
+      `
+    )
+    .get(provider, callbackState) as
+    | {
+        id: string;
+        provider: string;
+        account_label: string | null;
+        auth_mode: string;
+        status: string;
+        scopes: string | null;
+        callback_state: string | null;
+        authorization_url: string | null;
+        metadata_json: string | null;
+        external_account_id: string | null;
+        last_error_message: string | null;
+        last_verified_at: string | null;
+        updated_at: string | null;
+        created_at: string | null;
+      }
+    | undefined;
+}
+
+function updateSourceConnectionMetadata(connectionId: string, metadata: Record<string, unknown>) {
+  db.prepare(
+    `
+      UPDATE source_connections
+      SET metadata_json = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+  ).run(JSON.stringify(metadata), connectionId);
+}
+
+function updatePracticePantherAuthStart(connectionId: string, authorizationUrl: string, metadata: Record<string, unknown>) {
+  db.prepare(
+    `
+      UPDATE source_connections
+      SET auth_mode = 'oauth_browser',
+          status = 'auth_pending',
+          authorization_url = ?,
+          metadata_json = ?,
+          last_error_message = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+  ).run(authorizationUrl, JSON.stringify(metadata), connectionId);
+}
+
+function markPracticePantherConnectionError(connectionId: string, message: string) {
+  db.prepare(
+    `
+      UPDATE source_connections
+      SET status = 'error',
+          last_error_message = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+  ).run(message, connectionId);
+}
+
+function completePracticePantherConnection(
+  connectionId: string,
+  input: {
+    accountLabel?: string | null;
+    externalAccountId?: string | null;
+    metadata: Record<string, unknown>;
+  }
+) {
+  db.prepare(
+    `
+      UPDATE source_connections
+      SET account_label = COALESCE(?, account_label),
+          auth_mode = 'oauth_browser',
+          status = 'active',
+          external_account_id = COALESCE(?, external_account_id),
+          metadata_json = ?,
+          last_verified_at = CURRENT_TIMESTAMP,
+          callback_state = NULL,
+          authorization_url = NULL,
+          last_error_message = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `
+  ).run(input.accountLabel ?? null, input.externalAccountId ?? null, JSON.stringify(input.metadata), connectionId);
+}
+
+function buildPracticePantherCallbackRedirect(returnTo: string | null | undefined, success: boolean, message?: string) {
+  const fallback = returnTo && /^https?:\/\//i.test(returnTo) ? returnTo : returnTo && returnTo.startsWith("/") ? returnTo : "/cases";
+  const url = new URL(fallback, fallback.startsWith("http") ? undefined : "http://localhost");
+  if (success) {
+    url.searchParams.set("pp_auth", "success");
+  } else {
+    url.searchParams.set("pp_auth", "error");
+    if (message) {
+      url.searchParams.set("pp_error", message);
+    }
+  }
+  return fallback.startsWith("http") ? url.toString() : `${url.pathname}${url.search}`;
+}
+
+async function getValidPracticePantherAccessToken(connection: {
+  id: string;
+  metadata_json: string | null;
+}) {
+  const config = readPracticePantherConfig();
+  if (!isPracticePantherOAuthReady()) {
+    throw new Error(PRACTICE_PANTHER_SYNC_DEFERRED_MESSAGE);
+  }
+
+  const metadata = parsePracticePantherConnectionMetadata(connection.metadata_json);
+  const oauth = metadata.oauth;
+  if (!oauth?.refresh_token) {
+    throw new Error("PracticePanther connection is missing refresh_token");
+  }
+
+  const expiresAt = oauth.expires_at ? new Date(oauth.expires_at).getTime() : 0;
+  const now = Date.now();
+  if (oauth.access_token && expiresAt > now + 30_000) {
+    return {
+      accessToken: oauth.access_token,
+      metadata
+    };
+  }
+
+  const refreshed = await refreshPracticePantherAccessToken(config, oauth.refresh_token);
+  const merged = mergePracticePantherConnectionMetadata(connection.metadata_json, {
+    oauth: {
+      access_token: refreshed.access_token,
+      refresh_token: refreshed.refresh_token,
+      token_type: refreshed.token_type,
+      expires_at: new Date(Date.now() + Math.max(0, refreshed.expires_in - 300) * 1000).toISOString()
+    }
+  });
+  updateSourceConnectionMetadata(connection.id, merged as Record<string, unknown>);
+  return {
+    accessToken: refreshed.access_token,
+    metadata: merged
+  };
+}
 
 app.addHook("onRequest", async (request, reply) => {
   const path = request.url.split("?")[0] ?? "";
@@ -187,12 +514,15 @@ app.post("/api/cases", async (request, reply) => {
       }
     | undefined;
 
+  if (body?.case_id) {
+    return reply.code(400).send({ ok: false, error: "case_id may not be supplied by clients" });
+  }
+
   if (!body?.name?.trim()) {
     return reply.code(400).send({ ok: false, error: "name is required" });
   }
 
   const scaffold = ensureCaseScaffold(db, {
-    caseId: body.case_id,
     name: body.name.trim(),
     caseType: body.case_type,
     ppMatterId: body.pp_matter_id ?? null,
@@ -329,6 +659,725 @@ app.patch("/api/cases/:caseId", async (request, reply) => {
   return { ok: true, case: row };
 });
 
+app.get("/api/cases/:caseId/exhibit-packets", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
+    | { id: string }
+    | undefined;
+  if (!caseExists) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+
+  return {
+    ok: true,
+    case_id: caseId,
+    packets: getCaseExhibitWorkspace(db, caseId)
+  };
+});
+
+app.get("/api/cases/:caseId/exhibits", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
+    | { id: string }
+    | undefined;
+  if (!caseExists) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+
+  return {
+    ok: true,
+    case_id: caseId,
+    packets: getCaseExhibitWorkspace(db, caseId)
+  };
+});
+
+function requireCase(caseId: string, reply: { code: (n: number) => { send: (b: unknown) => unknown } }) {
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as { id: string } | undefined;
+  if (!caseExists) {
+    reply.code(404).send({ ok: false, error: "case not found" });
+    return false;
+  }
+  return true;
+}
+
+app.get("/api/cases/:caseId/document-templates", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const rows = listUserDocumentTemplates(db, caseId);
+  return {
+    ok: true,
+    case_id: caseId,
+    templates: rows.map(serializeUserDocumentTemplate)
+  };
+});
+
+app.post("/api/cases/:caseId/document-templates", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const body = request.body as
+    | {
+        name?: string;
+        description?: string | null;
+        body_markdown?: string;
+        fields?: Array<{ name: string; label?: string; default?: string | null }>;
+        ai_hints?: string | null;
+      }
+    | undefined;
+  const bodyMarkdown = typeof body?.body_markdown === "string" ? body.body_markdown : "";
+  if (!bodyMarkdown.trim()) {
+    return reply.code(400).send({ ok: false, error: "body_markdown is required" });
+  }
+  if (bodyMarkdown.length > MAX_TEMPLATE_BODY_MARKDOWN) {
+    return reply.code(400).send({ ok: false, error: "body_markdown is too large" });
+  }
+  const row = createUserDocumentTemplate(db, {
+    caseId,
+    name: body?.name ?? "Untitled template",
+    description: body?.description,
+    body_markdown: bodyMarkdown,
+    fields: body?.fields,
+    ai_hints: body?.ai_hints
+  });
+  return { ok: true, case_id: caseId, template: row ? serializeUserDocumentTemplate(row) : null };
+});
+
+app.get("/api/cases/:caseId/document-templates/:templateId", async (request, reply) => {
+  const { caseId, templateId } = request.params as { caseId: string; templateId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const row = getUserDocumentTemplate(db, templateId, caseId);
+  if (!row) {
+    return reply.code(404).send({ ok: false, error: "template not found" });
+  }
+  return { ok: true, case_id: caseId, template: serializeUserDocumentTemplate(row) };
+});
+
+app.patch("/api/cases/:caseId/document-templates/:templateId", async (request, reply) => {
+  const { caseId, templateId } = request.params as { caseId: string; templateId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const body = request.body as
+    | {
+        name?: string | null;
+        description?: string | null;
+        body_markdown?: string | null;
+        fields?: Array<{ name: string; label?: string; default?: string | null }> | null;
+        ai_hints?: string | null;
+      }
+    | undefined;
+  if (typeof body?.body_markdown === "string" && body.body_markdown.length > MAX_TEMPLATE_BODY_MARKDOWN) {
+    return reply.code(400).send({ ok: false, error: "body_markdown is too large" });
+  }
+  const row = updateUserDocumentTemplate(db, {
+    templateId,
+    caseId,
+    name: body?.name,
+    description: body?.description,
+    body_markdown: body?.body_markdown,
+    fields: body?.fields,
+    ai_hints: body?.ai_hints
+  });
+  if (!row) {
+    return reply.code(404).send({ ok: false, error: "template not found" });
+  }
+  return { ok: true, case_id: caseId, template: serializeUserDocumentTemplate(row) };
+});
+
+app.delete("/api/cases/:caseId/document-templates/:templateId", async (request, reply) => {
+  const { caseId, templateId } = request.params as { caseId: string; templateId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const deleted = deleteUserDocumentTemplate(db, templateId, caseId);
+  if (!deleted) {
+    return reply.code(404).send({ ok: false, error: "template not found" });
+  }
+  return { ok: true, case_id: caseId };
+});
+
+app.post("/api/cases/:caseId/document-templates/:templateId/render", async (request, reply) => {
+  const { caseId, templateId } = request.params as { caseId: string; templateId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const template = getUserDocumentTemplate(db, templateId, caseId);
+  if (!template) {
+    return reply.code(404).send({ ok: false, error: "template not found" });
+  }
+  const body = request.body as
+    | {
+        values?: Record<string, string>;
+        body_markdown?: string | null;
+        save?: boolean;
+        source_item_id?: string | null;
+        status?: string | null;
+      }
+    | undefined;
+  const values = body?.values && typeof body.values === "object" && !Array.isArray(body.values) ? body.values : {};
+  const validated = validateValuesPayload(values);
+  if (!validated.ok) {
+    return reply.code(400).send({ ok: false, error: validated.error });
+  }
+  const bodyToRender =
+    typeof body?.body_markdown === "string" ? body.body_markdown : template.body_markdown;
+  if (bodyToRender.length > MAX_TEMPLATE_BODY_MARKDOWN) {
+    return reply.code(400).send({ ok: false, error: "body_markdown is too large" });
+  }
+  const fieldsForRender = buildFieldsForRender(template, bodyToRender);
+  const { rendered_markdown, missing_placeholders } = renderUserTemplate(bodyToRender, values, fieldsForRender);
+  let fill = null;
+  if (body?.save) {
+    const saved = saveTemplateFill(db, {
+      templateId,
+      caseId,
+      values,
+      rendered_markdown,
+      source_item_id: body?.source_item_id,
+      status: body?.status ?? undefined
+    });
+    if (!saved.ok) {
+      return reply.code(400).send({ ok: false, error: saved.error });
+    }
+    fill = serializeUserDocumentFill(saved.row);
+  }
+  return {
+    ok: true,
+    case_id: caseId,
+    template_id: templateId,
+    rendered_markdown,
+    missing_placeholders,
+    fill
+  };
+});
+
+app.get("/api/cases/:caseId/document-template-fills", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const q = request.query as { template_id?: string };
+  const templateId = typeof q.template_id === "string" && q.template_id.trim() ? q.template_id.trim() : undefined;
+  const rows = listTemplateFills(db, caseId, templateId);
+  return {
+    ok: true,
+    case_id: caseId,
+    fills: rows.map(serializeUserDocumentFill)
+  };
+});
+
+app.get("/api/cases/:caseId/document-template-fills/:fillId", async (request, reply) => {
+  const { caseId, fillId } = request.params as { caseId: string; fillId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const row = getTemplateFill(db, fillId, caseId);
+  if (!row) {
+    return reply.code(404).send({ ok: false, error: "fill not found" });
+  }
+  return { ok: true, case_id: caseId, fill: serializeUserDocumentFill(row) };
+});
+
+app.patch("/api/cases/:caseId/document-template-fills/:fillId", async (request, reply) => {
+  const { caseId, fillId } = request.params as { caseId: string; fillId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const body = request.body as
+    | {
+        values?: Record<string, string> | null;
+        rendered_markdown?: string | null;
+        status?: string | null;
+      }
+    | undefined;
+  if (body?.values && typeof body.values === "object" && !Array.isArray(body.values)) {
+    const validated = validateValuesPayload(body.values);
+    if (!validated.ok) {
+      return reply.code(400).send({ ok: false, error: validated.error });
+    }
+  }
+  if (typeof body?.rendered_markdown === "string" && body.rendered_markdown.length > MAX_TEMPLATE_BODY_MARKDOWN) {
+    return reply.code(400).send({ ok: false, error: "rendered_markdown is too large" });
+  }
+  const row = updateTemplateFill(db, {
+    fillId,
+    caseId,
+    values: body?.values,
+    rendered_markdown: body?.rendered_markdown,
+    status: body?.status
+  });
+  if (!row) {
+    return reply.code(404).send({ ok: false, error: "fill not found" });
+  }
+  return { ok: true, case_id: caseId, fill: serializeUserDocumentFill(row) };
+});
+
+app.delete("/api/cases/:caseId/document-template-fills/:fillId", async (request, reply) => {
+  const { caseId, fillId } = request.params as { caseId: string; fillId: string };
+  if (!requireCase(caseId, reply)) {
+    return;
+  }
+  const deleted = deleteTemplateFill(db, fillId, caseId);
+  if (!deleted) {
+    return reply.code(404).send({ ok: false, error: "fill not found" });
+  }
+  return { ok: true, case_id: caseId };
+});
+
+app.post("/api/cases/:caseId/exhibit-packets", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as
+    | {
+        packet_name?: string;
+        packet_mode?: "compact" | "full";
+        naming_scheme?: string;
+      }
+    | undefined;
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
+    | { id: string }
+    | undefined;
+  if (!caseExists) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+
+  const packet = createExhibitPacket(db, {
+    caseId,
+    packetName: body?.packet_name ?? null,
+    packetMode: body?.packet_mode ?? null,
+    namingScheme: body?.naming_scheme ?? null
+  });
+  if (!packet.ok) {
+    return reply.code(400).send({ ok: false, error: packet.error });
+  }
+
+  return { ok: true, case_id: caseId, packet: packet.packet };
+});
+
+app.patch("/api/exhibit-packets/:packetId", async (request, reply) => {
+  const { packetId } = request.params as { packetId: string };
+  const body = request.body as
+    | {
+        packet_name?: string | null;
+        packet_mode?: "compact" | "full" | null;
+        naming_scheme?: string | null;
+        status?: "draft" | "needs_review" | "ready" | "finalized" | "exported" | "archived" | null;
+      }
+    | undefined;
+
+  const packet = updateExhibitPacket(db, {
+    packetId,
+    packetName: body?.packet_name,
+    packetMode: body?.packet_mode ?? undefined,
+    namingScheme: body?.naming_scheme,
+    status: body?.status ?? undefined
+  });
+  if (!packet) {
+    return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+
+  return { ok: true, packet };
+});
+
+app.post("/api/exhibit-packets/:packetId/sections", async (request, reply) => {
+  const { packetId } = request.params as { packetId: string };
+  const body = request.body as { section_key?: string; section_label?: string } | undefined;
+  const packet = createExhibitSection(db, {
+    packetId,
+    sectionKey: body?.section_key ?? null,
+    sectionLabel: body?.section_label ?? null
+  });
+  if (!packet.ok) {
+    const code = /already exists/i.test(packet.error) ? 400 : 404;
+    return reply.code(code).send({ ok: false, error: packet.error });
+  }
+  return { ok: true, packet: packet.packet };
+});
+
+app.post("/api/exhibit-packets/:packetId/sections/reorder", async (request, reply) => {
+  const { packetId } = request.params as { packetId: string };
+  const body = request.body as { section_ids?: string[] } | undefined;
+  if (!body?.section_ids?.length) {
+    return reply.code(400).send({ ok: false, error: "section_ids are required" });
+  }
+  const result = reorderExhibitSections(db, packetId, body.section_ids);
+  if (!result.ok) {
+    const code = /not found/i.test(result.error) ? 404 : 400;
+    return reply.code(code).send({ ok: false, error: result.error });
+  }
+  return { ok: true, packet: result.packet };
+});
+
+app.post("/api/exhibit-sections/:sectionId/exhibits/reorder", async (request, reply) => {
+  const { sectionId } = request.params as { sectionId: string };
+  const body = request.body as { exhibit_ids?: string[] } | undefined;
+  if (!body?.exhibit_ids?.length) {
+    return reply.code(400).send({ ok: false, error: "exhibit_ids are required" });
+  }
+  const result = reorderExhibitsInSection(db, sectionId, body.exhibit_ids);
+  if (!result.ok) {
+    const code = /not found/i.test(result.error) ? 404 : 400;
+    return reply.code(code).send({ ok: false, error: result.error });
+  }
+  return { ok: true, packet: result.packet };
+});
+
+app.patch("/api/exhibit-sections/:sectionId", async (request, reply) => {
+  const { sectionId } = request.params as { sectionId: string };
+  const body = request.body as { section_label?: string | null; sort_order?: number | null } | undefined;
+  const packet = updateExhibitSection(db, {
+    sectionId,
+    sectionLabel: body?.section_label,
+    sortOrder: body?.sort_order ?? undefined
+  });
+  if (!packet) {
+    return reply.code(404).send({ ok: false, error: "section not found" });
+  }
+  return { ok: true, packet };
+});
+
+app.delete("/api/exhibit-sections/:sectionId", async (request, reply) => {
+  const { sectionId } = request.params as { sectionId: string };
+  const packet = deleteExhibitSection(db, sectionId);
+  if (!packet) {
+    return reply.code(404).send({ ok: false, error: "section not found" });
+  }
+  return { ok: true, packet };
+});
+
+app.post("/api/exhibit-sections/:sectionId/exhibits", async (request, reply) => {
+  const { sectionId } = request.params as { sectionId: string };
+  const body = request.body as
+    | {
+        exhibit_label?: string | null;
+        title?: string | null;
+        purpose?: string | null;
+        objection_risk?: string | null;
+        notes?: string | null;
+      }
+    | undefined;
+  const packet = createExhibit(db, {
+    sectionId,
+    exhibitLabel: body?.exhibit_label ?? null,
+    title: body?.title ?? null,
+    purpose: body?.purpose ?? null,
+    objectionRisk: body?.objection_risk ?? null,
+    notes: body?.notes ?? null
+  });
+  if (!packet) {
+    return reply.code(404).send({ ok: false, error: "section not found" });
+  }
+  return { ok: true, packet };
+});
+
+app.post("/api/cases/:caseId/exhibits", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as
+    | {
+        section_id?: string;
+        exhibit_label?: string | null;
+        title?: string | null;
+        purpose?: string | null;
+        objection_risk?: string | null;
+        notes?: string | null;
+      }
+    | undefined;
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
+    | { id: string }
+    | undefined;
+  if (!caseExists) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+  if (!body?.section_id) {
+    return reply.code(400).send({ ok: false, error: "section_id is required" });
+  }
+  const sectionCase = getSectionCaseId(db, body.section_id);
+  if (!sectionCase || sectionCase.case_id !== caseId) {
+    return reply.code(404).send({ ok: false, error: "section not found for case" });
+  }
+  const packet = createExhibit(db, {
+    sectionId: body.section_id,
+    exhibitLabel: body.exhibit_label ?? null,
+    title: body.title ?? null,
+    purpose: body.purpose ?? null,
+    objectionRisk: body.objection_risk ?? null,
+    notes: body.notes ?? null
+  });
+  if (!packet) {
+    return reply.code(404).send({ ok: false, error: "section not found" });
+  }
+  return { ok: true, packet };
+});
+
+app.patch("/api/exhibits/:exhibitId", async (request, reply) => {
+  const { exhibitId } = request.params as { exhibitId: string };
+  const body = request.body as
+    | {
+        exhibit_label?: string | null;
+        title?: string | null;
+        status?: string | null;
+        purpose?: string | null;
+        objection_risk?: string | null;
+        notes?: string | null;
+        sort_order?: number | null;
+      }
+    | undefined;
+  const packet = updateExhibit(db, {
+    exhibitId,
+    exhibitLabel: body?.exhibit_label,
+    title: body?.title,
+    status: body?.status,
+    purpose: body?.purpose,
+    objectionRisk: body?.objection_risk,
+    notes: body?.notes,
+    sortOrder: body?.sort_order ?? undefined
+  });
+  if (!packet) {
+    return reply.code(404).send({ ok: false, error: "exhibit not found" });
+  }
+  return { ok: true, packet };
+});
+
+app.delete("/api/exhibits/:exhibitId", async (request, reply) => {
+  const { exhibitId } = request.params as { exhibitId: string };
+  const packet = deleteExhibit(db, exhibitId);
+  if (!packet) {
+    return reply.code(404).send({ ok: false, error: "exhibit not found" });
+  }
+  return { ok: true, packet };
+});
+
+app.post("/api/exhibits/:exhibitId/items", async (request, reply) => {
+  const { exhibitId } = request.params as { exhibitId: string };
+  const body = request.body as { source_item_id?: string; notes?: string | null } | undefined;
+  if (!body?.source_item_id) {
+    return reply.code(400).send({ ok: false, error: "source_item_id is required" });
+  }
+  const result = addExhibitItem(db, {
+    exhibitId,
+    sourceItemId: body.source_item_id,
+    notes: body.notes ?? null
+  });
+  if (!result.ok) {
+    const code = /not found/i.test(result.error) ? 404 : 400;
+    return reply.code(code).send({ ok: false, error: result.error });
+  }
+  return { ok: true, packet: result.packet };
+});
+
+app.delete("/api/exhibit-items/:itemId", async (request, reply) => {
+  const { itemId } = request.params as { itemId: string };
+  const packet = removeExhibitItem(db, itemId);
+  if (!packet) {
+    return reply.code(404).send({ ok: false, error: "exhibit item not found" });
+  }
+  return { ok: true, packet };
+});
+
+app.patch("/api/exhibit-items/:itemId/page-rules", async (request, reply) => {
+  const { itemId } = request.params as { itemId: string };
+  const body = request.body as { exclude_canonical_page_ids?: string[] } | undefined;
+  if (body?.exclude_canonical_page_ids && body.exclude_canonical_page_ids.length > 1000) {
+    return reply.code(400).send({ ok: false, error: "exclude_canonical_page_ids may not exceed 1000 items" });
+  }
+  const result = updateExhibitItemPageRules(db, {
+    exhibitItemId: itemId,
+    excludeCanonicalPageIds: body?.exclude_canonical_page_ids ?? []
+  });
+  if (!result.ok) {
+    const code = /not found/i.test(result.error) ? 404 : 400;
+    return reply.code(code).send({ ok: false, error: result.error });
+  }
+  return { ok: true, packet: result.packet };
+});
+
+app.get("/api/exhibit-packets/:packetId/suggestions", async (request, reply) => {
+  const { packetId } = request.params as { packetId: string };
+  const suggestions = getPacketSuggestions(db, packetId);
+  if (!suggestions) {
+    return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+  return { ok: true, suggestions };
+});
+
+app.get("/api/exhibit-packets/:packetId/history", async (request, reply) => {
+  const { packetId } = request.params as { packetId: string };
+  const history = getPacketHistory(db, packetId);
+  if (!history) {
+    return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+  return { ok: true, history };
+});
+
+app.post("/api/exhibit-packets/:packetId/suggestions/:suggestionId/resolve", async (request, reply) => {
+  const { packetId, suggestionId } = request.params as { packetId: string; suggestionId: string };
+  const body = request.body as { action?: "accept" | "dismiss"; note?: string | null } | undefined;
+  if (body?.action !== "accept" && body?.action !== "dismiss") {
+    return reply.code(400).send({ ok: false, error: "action must be accept or dismiss" });
+  }
+  const result = resolveExhibitSuggestion(db, {
+    packetId,
+    suggestionId,
+    action: body.action,
+    note: body.note ?? null
+  });
+  if (!result.ok) {
+    const code = /not found/i.test(result.error) ? 404 : 400;
+    return reply.code(code).send({ ok: false, error: result.error });
+  }
+  return { ok: true, packet: result.packet };
+});
+
+app.post("/api/exhibit-packets/:packetId/finalize", async (request, reply) => {
+  const { packetId } = request.params as { packetId: string };
+  const result = finalizeExhibitPacket(db, packetId);
+  if (!result) {
+    return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+  return { ok: true, packet: result.packet, suggestions: result.suggestions, preview: result.preview };
+});
+
+app.post("/api/exhibit-packets/:packetId/exports/packet-pdf", async (request, reply) => {
+  const { packetId } = request.params as { packetId: string };
+  const packetCase = getPacketCaseId(db, packetId);
+  if (!packetCase) {
+    return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+  const layout = parsePacketPdfExportOptions(request.body);
+  try {
+    const result = await runPacketPdfExport(db, packetId, fetchBoxPdfBytesForSourceItem, layout);
+    if (!result.ok) {
+      const code = /not found/i.test(result.error) ? 404 : 400;
+      return reply.code(code).send({
+        ok: false,
+        error: result.error,
+        export_id: result.exportId ?? null,
+        manifest: result.manifest ?? null
+      });
+    }
+    return {
+      ok: true,
+      export_id: result.exportId,
+      page_count: result.pageCount,
+      manifest: result.manifest,
+      pdf_relative_path: result.relativePdfPath
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return reply.code(500).send({ ok: false, error: message });
+  }
+});
+
+app.get("/api/exhibit-packets/:packetId/exports", async (request, reply) => {
+  const { packetId } = request.params as { packetId: string };
+  if (!getPacketCaseId(db, packetId)) {
+    return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+  return { ok: true, exports: listPacketExportsForPacket(db, packetId) };
+});
+
+app.get("/api/exhibit-packet-exports/:exportId", async (request, reply) => {
+  const { exportId } = request.params as { exportId: string };
+  const row = getPacketExportRow(db, exportId);
+  if (!row) {
+    return reply.code(404).send({ ok: false, error: "export not found" });
+  }
+  let manifest: unknown = null;
+  if (row.manifest_json) {
+    try {
+      manifest = JSON.parse(row.manifest_json) as unknown;
+    } catch {
+      manifest = row.manifest_json;
+    }
+  }
+  return {
+    ok: true,
+    export: {
+      ...row,
+      manifest
+    }
+  };
+});
+
+app.get("/api/exhibit-packet-exports/:exportId/pdf", async (request, reply) => {
+  const { exportId } = request.params as { exportId: string };
+  const row = getPacketExportRow(db, exportId);
+  if (!row || row.status !== "complete" || !row.pdf_relative_path) {
+    return reply.code(404).send({ ok: false, error: "export PDF not available" });
+  }
+  const abs = resolveExportAbsolutePath(row.pdf_relative_path);
+  try {
+    const buf = await readFile(abs);
+    reply.header("content-type", "application/pdf");
+    reply.header("content-disposition", `attachment; filename="exhibit-packet-${exportId.slice(0, 8)}.pdf"`);
+    return reply.send(buf);
+  } catch {
+    return reply.code(404).send({ ok: false, error: "export file missing on disk" });
+  }
+});
+
+app.post("/api/cases/:caseId/packet-preview", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as { packet_id?: string } | undefined;
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
+    | { id: string }
+    | undefined;
+  if (!caseExists) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+  if (!body?.packet_id) {
+    return reply.code(400).send({ ok: false, error: "packet_id is required" });
+  }
+  const packetCase = getPacketCaseId(db, body.packet_id);
+  if (!packetCase || packetCase.case_id !== caseId) {
+    return reply.code(404).send({ ok: false, error: "packet not found for case" });
+  }
+  const preview = getPacketPreview(db, body.packet_id);
+  if (!preview) {
+    return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+  return { ok: true, preview };
+});
+
+app.post("/api/cases/:caseId/exhibit-list/generate", async (request, reply) => {
+  const { caseId } = request.params as { caseId: string };
+  const body = request.body as { packet_id?: string } | undefined;
+  const caseExists = db.prepare(`SELECT id FROM cases WHERE id = ? LIMIT 1`).get(caseId) as
+    | { id: string }
+    | undefined;
+  if (!caseExists) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+  if (!body?.packet_id) {
+    return reply.code(400).send({ ok: false, error: "packet_id is required" });
+  }
+  const packetCase = getPacketCaseId(db, body.packet_id);
+  if (!packetCase || packetCase.case_id !== caseId) {
+    return reply.code(404).send({ ok: false, error: "packet not found for case" });
+  }
+  const preview = getPacketPreview(db, body.packet_id);
+  if (!preview) {
+    return reply.code(404).send({ ok: false, error: "packet not found" });
+  }
+  const lines = preview.sections.flatMap((section) => {
+    const header = `## ${section.section_label}`;
+    const entries = section.exhibits.map((exhibit) => {
+      const title = exhibit.title?.trim() || "Untitled Exhibit";
+      return `- Exhibit ${exhibit.exhibit_label}: ${title} (${exhibit.page_count_estimate} pages)`;
+    });
+    return [header, ...entries];
+  });
+  return {
+    ok: true,
+    packet_id: body.packet_id,
+    markdown: lines.join("\n")
+  };
+});
+
 app.post("/dev/cases", async (request) => {
   const body = request.body as
     | {
@@ -442,23 +1491,280 @@ app.get("/api/connectors/box/folders/:folderId/items", async (request, reply) =>
  * Full authoritative sync: walk all subfolders under root (matter "Client File" or similar),
  * then persist via hydrateBoxInventory. Requires JWT env config.
  */
-app.post("/api/connectors/practicepanther/sync", async (_request, reply) => {
+app.get("/api/connectors/practicepanther/status", async () => {
+  const connection = readSourceConnectionByProvider("practicepanther");
+  return {
+    ok: true,
+    configured: isPracticePantherOAuthReady(),
+    api_base_url: readPracticePantherConfig().apiBaseUrl,
+    redirect_uri: readPracticePantherConfig().redirectUri,
+    connection
+  };
+});
+
+app.get("/api/connectors/practicepanther/matters", async (request, reply) => {
+  const connection = readSourceConnectionByProvider("practicepanther");
+  if (!connection) {
+    return reply.code(404).send({ ok: false, error: "practicepanther connection not found" });
+  }
+  try {
+    const { accessToken } = await getValidPracticePantherAccessToken(connection);
+    const config = readPracticePantherConfig();
+    const query =
+      typeof request.query === "object" && request.query !== null ? (request.query as { search_text?: string }).search_text : undefined;
+    const matters = await fetchPracticePantherMatters(config, accessToken, {
+      searchText: query ?? null
+    });
+    return { ok: true, matters };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "PracticePanther matter list failed";
+    markPracticePantherConnectionError(connection.id, message);
+    return reply.code(400).send({ ok: false, error: message });
+  }
+});
+
+app.get("/api/connectors/practicepanther/callback", async (request, reply) => {
+  const query = (request.query ?? {}) as { code?: string; state?: string; error?: string; error_description?: string };
+  if (!query.state) {
+    return reply.code(400).send({ ok: false, error: "state is required" });
+  }
+
+  const connection = readSourceConnectionByCallbackState("practicepanther", query.state);
+  if (!connection) {
+    return reply.code(404).send({ ok: false, error: "source connection not found" });
+  }
+
+  const currentMetadata = parsePracticePantherConnectionMetadata(connection.metadata_json);
+  const returnTo = currentMetadata.return_to ?? null;
+
+  if (query.error) {
+    const message = query.error_description ?? query.error;
+    markPracticePantherConnectionError(connection.id, message);
+    return reply.redirect(buildPracticePantherCallbackRedirect(returnTo, false, message));
+  }
+  if (!query.code) {
+    markPracticePantherConnectionError(connection.id, "authorization code is required");
+    return reply.redirect(buildPracticePantherCallbackRedirect(returnTo, false, "authorization code is required"));
+  }
+
+  try {
+    const config = readPracticePantherConfig();
+    const tokens = await exchangePracticePantherAuthorizationCode(config, query.code);
+    const oauthMetadata = mergePracticePantherConnectionMetadata(connection.metadata_json, {
+      oauth: {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        token_type: tokens.token_type,
+        expires_at: new Date(Date.now() + Math.max(0, tokens.expires_in - 300) * 1000).toISOString()
+      }
+    });
+    const me = await fetchPracticePantherCurrentUser(config, tokens.access_token);
+    const finalMetadata = mergePracticePantherConnectionMetadata(JSON.stringify(oauthMetadata), {
+      user: {
+        id: typeof me.id === "string" ? me.id : null,
+        display_name: typeof me.display_name === "string" ? me.display_name : null,
+        email: typeof me.email === "string" ? me.email : null
+      },
+      return_to: null
+    });
+    completePracticePantherConnection(connection.id, {
+      accountLabel: connection.account_label,
+      externalAccountId: typeof me.id === "string" ? me.id : null,
+      metadata: finalMetadata as Record<string, unknown>
+    });
+    return reply.redirect(buildPracticePantherCallbackRedirect(returnTo, true));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "PracticePanther OAuth callback failed";
+    markPracticePantherConnectionError(connection.id, message);
+    return reply.redirect(buildPracticePantherCallbackRedirect(returnTo, false, message));
+  }
+});
+
+app.post("/api/connectors/practicepanther/sync", async (request, reply) => {
   if (!isPracticePantherProductionSyncConfigured()) {
-    return reply.code(501).send({
+    return reply.code(400).send({
       ok: false,
       error: PRACTICE_PANTHER_SYNC_DEFERRED_MESSAGE,
       configured: false
     });
   }
-  const pp = readPracticePantherConfig();
-  return reply.code(501).send({
-    ok: false,
-    error:
-      "PP_API_BASE_URL and PP_CLIENT_ID are set but sync orchestration is not implemented yet. Next: OAuth authorization code flow, store refresh_token on source_connections, then call PracticePanther REST (see fetchPracticePantherMatters stub in pp-provider).",
-    configured: true,
-    oauth_env_ready: isPracticePantherOAuthReady(),
-    pp_api_base_url: pp.apiBaseUrl
-  });
+  const body = request.body as
+    | {
+        case_id?: string;
+        pp_matter_id?: string | null;
+        search_text?: string | null;
+      }
+    | undefined;
+  if (!body?.case_id?.trim()) {
+    return reply.code(400).send({ ok: false, error: "case_id is required" });
+  }
+
+  const caseRow = db
+    .prepare(
+      `
+        SELECT id, pp_matter_id
+        FROM cases
+        WHERE id = ?
+        LIMIT 1
+      `
+    )
+    .get(body.case_id.trim()) as { id: string; pp_matter_id: string | null } | undefined;
+  if (!caseRow) {
+    return reply.code(404).send({ ok: false, error: "case not found" });
+  }
+
+  const connection = readSourceConnectionByProvider("practicepanther");
+  if (!connection) {
+    return reply.code(404).send({ ok: false, error: "practicepanther connection not found" });
+  }
+
+  try {
+    const { accessToken } = await getValidPracticePantherAccessToken(connection);
+    const config = readPracticePantherConfig();
+    const targetMatterId = body.pp_matter_id?.trim() || caseRow.pp_matter_id;
+    if (!targetMatterId) {
+      return reply.code(400).send({ ok: false, error: "pp_matter_id is required (body or case field)" });
+    }
+
+    const matter = await fetchPracticePantherMatterById(config, accessToken, targetMatterId);
+    const matterPatch = buildPracticePantherMatterPatch(matter as Record<string, unknown>);
+    if (matterPatch.ppMatterId) {
+      db.prepare(`UPDATE cases SET pp_matter_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(matterPatch.ppMatterId, caseRow.id);
+    }
+
+    const matterRecord = matter as Record<string, unknown>;
+    const accountId =
+      matterRecord.account_ref && typeof matterRecord.account_ref === "object" && matterRecord.account_ref !== null
+        ? ((matterRecord.account_ref as { id?: unknown }).id as string | undefined)
+        : undefined;
+    const cursorAfter = buildPracticePantherSyncCursorValue();
+    const account = accountId ? await fetchPracticePantherAccountById(config, accessToken, accountId) : null;
+    const [contacts, notes, tasks, events, emails, callLogs, relationships] = await Promise.all([
+      accountId ? fetchPracticePantherContacts(config, accessToken, accountId) : Promise.resolve([]),
+      fetchPracticePantherNotes(config, accessToken, targetMatterId),
+      fetchPracticePantherTasks(config, accessToken, targetMatterId),
+      fetchPracticePantherEvents(config, accessToken, targetMatterId),
+      fetchPracticePantherEmails(config, accessToken, targetMatterId),
+      fetchPracticePantherCallLogs(config, accessToken, targetMatterId),
+      fetchPracticePantherRelationships(config, accessToken, targetMatterId)
+    ]);
+
+    const entities = [
+      {
+        entity_type: "matter",
+        pp_entity_id: String(matter.id),
+        title:
+          (typeof matter.display_name === "string" && matter.display_name) ||
+          (typeof matter.name === "string" && matter.name) ||
+          null,
+        source_updated_at: typeof matter.updated_at === "string" ? matter.updated_at : null,
+        raw_json: {
+          ...matter,
+          name:
+            (typeof matter.name === "string" && matter.name) ||
+            (typeof matter.display_name === "string" ? matter.display_name : null),
+          pp_matter_id: typeof matter.id === "string" ? matter.id : targetMatterId
+        },
+        custom_fields: extractPracticePantherCustomFields("matter", matter as Record<string, unknown>)
+      },
+      ...(account
+        ? [
+            {
+              entity_type: "account",
+              pp_entity_id: String(account.id),
+              title:
+                (typeof account.display_name === "string" && account.display_name) ||
+                (typeof account.company_name === "string" ? account.company_name : null),
+              source_updated_at: typeof account.updated_at === "string" ? account.updated_at : null,
+              raw_json: account,
+              custom_fields: extractPracticePantherCustomFields("company", account)
+            }
+          ]
+        : []),
+      ...contacts.map((contact) => ({
+        entity_type: "contact",
+        pp_entity_id: String(contact.id),
+        title:
+          (typeof contact.display_name === "string" && contact.display_name) ||
+          (typeof contact.first_name === "string" ? contact.first_name : null),
+        source_updated_at: typeof contact.updated_at === "string" ? contact.updated_at : null,
+        raw_json: contact,
+        custom_fields: extractPracticePantherCustomFields("contact", contact)
+      })),
+      ...notes.map((note) => ({
+        entity_type: "note",
+        pp_entity_id: String(note.id),
+        title: typeof note.subject === "string" ? note.subject : null,
+        source_updated_at: typeof note.updated_at === "string" ? note.updated_at : null,
+        raw_json: note
+      })),
+      ...tasks.map((task) => ({
+        entity_type: "task",
+        pp_entity_id: String(task.id),
+        title: typeof task.subject === "string" ? task.subject : null,
+        source_updated_at: typeof task.updated_at === "string" ? task.updated_at : null,
+        raw_json: task
+      })),
+      ...events.map((event) => ({
+        entity_type: "event",
+        pp_entity_id: String(event.id),
+        title: typeof event.subject === "string" ? event.subject : null,
+        source_updated_at: typeof event.updated_at === "string" ? event.updated_at : null,
+        raw_json: event
+      })),
+      ...emails.map((email) => ({
+        entity_type: "email",
+        pp_entity_id: String(email.id),
+        title: typeof email.subject === "string" ? email.subject : null,
+        source_updated_at: typeof email.updated_at === "string" ? email.updated_at : null,
+        raw_json: email
+      })),
+      ...callLogs.map((callLog) => ({
+        entity_type: "calllog",
+        pp_entity_id: String(callLog.id),
+        title: typeof callLog.subject === "string" ? callLog.subject : null,
+        source_updated_at: typeof callLog.updated_at === "string" ? callLog.updated_at : null,
+        raw_json: callLog
+      })),
+      ...relationships.map((relationship) => ({
+        entity_type: "relationship",
+        pp_entity_id: String(relationship.id),
+        title: typeof relationship.name === "string" ? relationship.name : null,
+        source_updated_at: typeof relationship.updated_at === "string" ? relationship.updated_at : null,
+        raw_json: relationship
+      }))
+    ];
+
+    const sync = hydratePracticePantherState(db, {
+      caseId: caseRow.id,
+      accountLabel: connection.account_label ?? "PracticePanther",
+      cursorAfter,
+      entities
+    });
+
+    return {
+      ok: true,
+      connection_id: connection.id,
+      case_id: caseRow.id,
+      pp_matter_id: targetMatterId,
+      sync,
+      counts: {
+        matter: 1,
+        account: account ? 1 : 0,
+        contacts: contacts.length,
+        notes: notes.length,
+        tasks: tasks.length,
+        events: events.length,
+        emails: emails.length,
+        calllogs: callLogs.length,
+        relationships: relationships.length
+      }
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "PracticePanther sync failed";
+    markPracticePantherConnectionError(connection.id, message);
+    return reply.code(400).send({ ok: false, error: message });
+  }
 });
 
 app.post("/api/connectors/box/sync", async (request, reply) => {
@@ -547,12 +1853,30 @@ app.post("/api/connectors/box/sync", async (request, reply) => {
 
 app.post("/api/connectors/practicepanther/auth/start", async (request, reply) => {
   const spec = getSourceConnectorSpec("practicepanther");
-  const body = request.body as { account_label?: string; scopes?: string[] } | undefined;
+  const body = request.body as
+    | { account_label?: string; scopes?: string[]; return_to?: string | null }
+    | undefined;
+  if (!isPracticePantherOAuthReady()) {
+    return reply.code(400).send({
+      ok: false,
+      error: PRACTICE_PANTHER_SYNC_DEFERRED_MESSAGE,
+      redirect_uri: readPracticePantherConfig().redirectUri
+    });
+  }
   const connection = beginSourceConnectionAuth(db, {
     provider: spec.provider,
     accountLabel: body?.account_label ?? spec.defaultAccountLabel,
-    scopes: body?.scopes
+    scopes: body?.scopes,
+    authMode: "oauth_browser"
   });
+
+  const existing = readSourceConnectionByProvider("practicepanther");
+  const config = readPracticePantherConfig();
+  const authorizationUrl = buildPracticePantherAuthorizationUrl(config, connection.callback_state);
+  const mergedMetadata = mergePracticePantherConnectionMetadata(existing?.metadata_json ?? null, {
+    return_to: body?.return_to ?? null
+  });
+  updatePracticePantherAuthStart(connection.id, authorizationUrl, mergedMetadata as Record<string, unknown>);
 
   reply.send({
     ok: true,
@@ -560,9 +1884,10 @@ app.post("/api/connectors/practicepanther/auth/start", async (request, reply) =>
     connection_id: connection.id,
     auth_mode: connection.auth_mode,
     status: connection.status,
-    authorization_url: connection.authorization_url,
+    authorization_url: authorizationUrl,
     callback_state: connection.callback_state,
-    scopes: connection.scopes
+    scopes: connection.scopes,
+    redirect_uri: config.redirectUri
   });
 });
 

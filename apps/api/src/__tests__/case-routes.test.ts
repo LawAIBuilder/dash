@@ -95,6 +95,23 @@ describe("case and review routes", () => {
     });
   });
 
+  it("rejects caller-supplied case ids on production case creation", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/cases",
+      payload: {
+        case_id: "client-supplied-id",
+        name: "Should Fail"
+      }
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({
+      ok: false,
+      error: "case_id may not be supplied by clients"
+    });
+  });
+
   it("normalizes through the production alias route", async () => {
     const createRes = await app.inject({
       method: "POST",

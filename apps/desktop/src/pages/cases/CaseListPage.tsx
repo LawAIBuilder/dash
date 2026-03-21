@@ -11,6 +11,7 @@ import { formatDateTime, formatLabel } from "@/ui/formatters";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
+import { StatePanel } from "@/components/case/StatePanel";
 
 export function CaseListPage() {
   const navigate = useNavigate();
@@ -176,9 +177,7 @@ export function CaseListPage() {
         </CardHeader>
         <CardContent>
           {error ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-              {error instanceof Error ? error.message : "Failed to load cases."}
-            </div>
+            <StatePanel variant="error" message={error instanceof Error ? error.message : "Failed to load cases."} />
           ) : null}
 
           {isLoading ? (
@@ -232,9 +231,7 @@ export function CaseListPage() {
               </Table>
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-              No matters yet. Create the first case and link a Box folder to begin.
-            </div>
+            <StatePanel message="No matters yet. Create the first case and link a Box folder to begin." className="text-center" />
           )}
         </CardContent>
       </Card>

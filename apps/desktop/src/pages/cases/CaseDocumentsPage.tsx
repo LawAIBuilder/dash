@@ -12,9 +12,10 @@ import { PdfPreviewDialog } from "@/components/documents/PdfPreviewDialog";
 import { useCaseActions } from "@/hooks/useCaseActions";
 import { useDocumentTable } from "@/hooks/useDocumentTable";
 import { useProjection } from "@/hooks/useProjection";
-import { previewFile, queueOcr } from "@/lib/api-client";
+import { previewFile } from "@/lib/api-client";
 import { formatDateTime, formatLabel } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
+import { StatePanel } from "@/components/case/StatePanel";
 
 export function CaseDocumentsPage() {
   const { caseId } = useParams();
@@ -45,7 +46,7 @@ export function CaseDocumentsPage() {
 
   async function queueCaseOcr() {
     try {
-      await queueOcrMutation.mutateAsync();
+      await queueOcrMutation.mutateAsync(undefined);
       toast.success("OCR jobs queued");
     } catch (queueError) {
       toast.error(queueError instanceof Error ? queueError.message : "Queue OCR failed");
@@ -53,11 +54,11 @@ export function CaseDocumentsPage() {
   }
 
   async function queueDocumentOcr(canonicalDocumentId: string) {
-    if (!caseId) {
-      return;
-    }
     try {
-      await queueOcr(caseId, { canonical_document_id: canonicalDocumentId, force_rerun: true });
+      await queueOcrMutation.mutateAsync({
+        canonical_document_id: canonicalDocumentId,
+        force_rerun: true
+      });
       toast.success("Document OCR re-queued");
     } catch (queueError) {
       toast.error(queueError instanceof Error ? queueError.message : "Document OCR re-queue failed");
@@ -65,7 +66,7 @@ export function CaseDocumentsPage() {
   }
 
   if (error) {
-    return <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>;
+    return <StatePanel variant="error" message={error} />;
   }
 
   return (
@@ -189,9 +190,7 @@ export function CaseDocumentsPage() {
               </Table>
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-              No documents match the current filters.
-            </div>
+            <StatePanel message="No documents match the current filters." className="text-center" />
           )}
         </CardContent>
       </Card>

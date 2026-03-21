@@ -124,9 +124,18 @@ export function derivePracticePantherMatterPatch(entity: PracticePantherEntityAd
   }
 
   const rawPayload = entity.raw_json ?? {};
-  const matterName = typeof rawPayload.name === "string" ? rawPayload.name : undefined;
+  const matterName =
+    typeof rawPayload.name === "string"
+      ? rawPayload.name
+      : typeof rawPayload.display_name === "string"
+        ? rawPayload.display_name
+        : undefined;
   const ppMatterId =
-    typeof rawPayload.pp_matter_id === "string" ? rawPayload.pp_matter_id : entity.pp_entity_id;
+    typeof rawPayload.pp_matter_id === "string"
+      ? rawPayload.pp_matter_id
+      : typeof rawPayload.id === "string"
+        ? rawPayload.id
+        : entity.pp_entity_id;
   const boxRootFolderId =
     typeof rawPayload.box_root_folder_id === "string" ? rawPayload.box_root_folder_id : undefined;
 

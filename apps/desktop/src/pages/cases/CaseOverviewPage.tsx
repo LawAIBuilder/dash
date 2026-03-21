@@ -9,6 +9,7 @@ import { useProjection } from "@/hooks/useProjection";
 import { useCaseActions } from "@/hooks/useCaseActions";
 import { formatDateTime, formatLabel, summarizeCountRecord } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
+import { StatePanel } from "@/components/case/StatePanel";
 
 function MetricCard({
   icon: Icon,
@@ -41,12 +42,14 @@ export function CaseOverviewPage() {
   const { caseId } = useParams();
   const { projection, watermark, isLoading, error, refresh } = useProjection(caseId);
   const { syncMutation, normalizeMutation, queueOcrMutation, heuristicMutation } = useCaseActions(caseId);
+  const branchSlice = projection?.slices?.branch_state_slice;
+  const issueProofSlice = projection?.slices?.issue_proof_slice;
 
   const metrics = useMemo(() => {
-    const classification = projection?.slices.document_inventory_slice.classification_summary;
-    const ocr = projection?.slices.document_inventory_slice.ocr_summary;
-    const branch = projection?.slices.branch_state_slice.branch_instances[0];
-    const proofRequirements = projection?.slices.issue_proof_slice.proof_requirements ?? [];
+    const classification = projection?.slices.document_inventory_slice?.classification_summary;
+    const ocr = projection?.slices.document_inventory_slice?.ocr_summary;
+    const branch = branchSlice?.branch_instances?.[0];
+    const proofRequirements = issueProofSlice?.proof_requirements ?? [];
     const satisfiedProof = proofRequirements.filter((item) => item.satisfied === 1).length;
     return {
       sourceItems: classification?.total ?? 0,
@@ -62,7 +65,7 @@ export function CaseOverviewPage() {
       reviewCount: ocr?.review_required_count ?? 0,
       proofSatisfied: `${satisfiedProof}/${proofRequirements.length}`
     };
-  }, [projection]);
+  }, [branchSlice, issueProofSlice, projection]);
 
   async function runAction(
     action: "sync" | "normalize" | "ocr" | "heuristics",
@@ -80,11 +83,7 @@ export function CaseOverviewPage() {
   }
 
   if (error) {
-    return (
-      <Card className="border-destructive/40">
-        <CardContent className="p-6 text-destructive">{error}</CardContent>
-      </Card>
-    );
+    return <StatePanel variant="error" message={error} />;
   }
 
   if (isLoading || !projection) {
@@ -92,8 +91,8 @@ export function CaseOverviewPage() {
   }
 
   const caseHeader = projection.slices.case_header;
-  const branchStatus = projection.slices.branch_state_slice.branch_stage_status;
-  const proofRequirements = projection.slices.issue_proof_slice.proof_requirements ?? [];
+  const branchStatus = branchSlice?.branch_stage_status ?? [];
+  const proofRequirements = issueProofSlice?.proof_requirements ?? [];
   const activeConnection = projection.slices.source_connection_slice?.connections[0] ?? null;
 
   return (
@@ -124,7 +123,7 @@ export function CaseOverviewPage() {
           <Button
             variant="outline"
             disabled={queueOcrMutation.isPending}
-            onClick={() => void runAction("ocr", () => queueOcrMutation.mutateAsync())}
+            onClick={() => void runAction("ocr", () => queueOcrMutation.mutateAsync(undefined))}
           >
             {queueOcrMutation.isPending ? "Queueing OCR…" : "Queue OCR"}
           </Button>
@@ -168,9 +167,7 @@ export function CaseOverviewPage() {
                 </div>
               ))
             ) : (
-              <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-                No proof requirements are present for this matter yet.
-              </div>
+              <StatePanel message="No proof requirements are present for this matter yet." />
             )}
           </CardContent>
         </Card>
@@ -204,7 +201,7 @@ export function CaseOverviewPage() {
                   </div>
                 </>
               ) : (
-                <div className="text-muted-foreground">No source connection yet.</div>
+                <StatePanel message="No source connection yet." />
               )}
             </CardContent>
           </Card>

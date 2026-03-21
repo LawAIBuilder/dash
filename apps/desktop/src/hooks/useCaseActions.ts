@@ -24,7 +24,7 @@ export function useCaseActions(caseId: string | null | undefined) {
   });
 
   const queueOcrMutation = useMutation({
-    mutationFn: () => queueOcr(normalizedCaseId),
+    mutationFn: (input?: Record<string, unknown>) => queueOcr(normalizedCaseId, input),
     onSuccess: invalidate
   });
 

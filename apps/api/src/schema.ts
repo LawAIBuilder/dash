@@ -781,5 +781,178 @@ export const authoritativeMigrations: AuthoritativeMigration[] = [
         );
       `);
     }
+  },
+  {
+    id: "0009_exhibit_workspace",
+    description: "Add exhibit packet, section, slot, item, page rule, and history tables",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS exhibit_packets (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+          packet_name TEXT NOT NULL,
+          packet_mode TEXT NOT NULL DEFAULT 'full',
+          naming_scheme TEXT NOT NULL DEFAULT 'letters',
+          status TEXT NOT NULL DEFAULT 'draft',
+          metadata_json TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_exhibit_packets_case ON exhibit_packets(case_id);
+
+        CREATE TABLE IF NOT EXISTS exhibit_sections (
+          id TEXT PRIMARY KEY,
+          exhibit_packet_id TEXT NOT NULL REFERENCES exhibit_packets(id) ON DELETE CASCADE,
+          section_key TEXT NOT NULL,
+          section_label TEXT NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(exhibit_packet_id, section_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exhibit_sections_packet ON exhibit_sections(exhibit_packet_id);
+
+        CREATE TABLE IF NOT EXISTS exhibits (
+          id TEXT PRIMARY KEY,
+          exhibit_section_id TEXT NOT NULL REFERENCES exhibit_sections(id) ON DELETE CASCADE,
+          exhibit_label TEXT NOT NULL,
+          title TEXT,
+          status TEXT NOT NULL DEFAULT 'draft',
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          purpose TEXT,
+          objection_risk TEXT,
+          notes TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_exhibits_section ON exhibits(exhibit_section_id);
+
+        CREATE TABLE IF NOT EXISTS exhibit_items (
+          id TEXT PRIMARY KEY,
+          exhibit_id TEXT NOT NULL REFERENCES exhibits(id) ON DELETE CASCADE,
+          source_item_id TEXT REFERENCES source_items(id) ON DELETE SET NULL,
+          canonical_document_id TEXT REFERENCES canonical_documents(id) ON DELETE SET NULL,
+          canonical_page_id TEXT REFERENCES canonical_pages(id) ON DELETE SET NULL,
+          page_start INTEGER,
+          page_end INTEGER,
+          include_order INTEGER NOT NULL DEFAULT 0,
+          notes TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_exhibit_items_exhibit ON exhibit_items(exhibit_id);
+        CREATE INDEX IF NOT EXISTS idx_exhibit_items_source_item ON exhibit_items(source_item_id);
+
+        CREATE TABLE IF NOT EXISTS exhibit_item_page_rules (
+          id TEXT PRIMARY KEY,
+          exhibit_item_id TEXT NOT NULL REFERENCES exhibit_items(id) ON DELETE CASCADE,
+          canonical_page_id TEXT NOT NULL REFERENCES canonical_pages(id) ON DELETE CASCADE,
+          rule_type TEXT NOT NULL,
+          note TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(exhibit_item_id, canonical_page_id, rule_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exhibit_item_rules_item ON exhibit_item_page_rules(exhibit_item_id);
+
+        CREATE TABLE IF NOT EXISTS exhibit_history (
+          id TEXT PRIMARY KEY,
+          packet_id TEXT NOT NULL REFERENCES exhibit_packets(id) ON DELETE CASCADE,
+          actor_id TEXT,
+          action_type TEXT NOT NULL,
+          target_type TEXT NOT NULL,
+          target_id TEXT,
+          payload_json TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_exhibit_history_packet ON exhibit_history(packet_id);
+      `);
+    }
+  },
+  {
+    id: "0010_exhibit_suggestion_resolutions",
+    description: "Persist accepted or dismissed exhibit suggestions",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS exhibit_suggestion_resolutions (
+          id TEXT PRIMARY KEY,
+          packet_id TEXT NOT NULL REFERENCES exhibit_packets(id) ON DELETE CASCADE,
+          suggestion_id TEXT NOT NULL,
+          resolution_action TEXT NOT NULL,
+          note TEXT,
+          resolved_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(packet_id, suggestion_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_exhibit_suggestion_resolutions_packet
+          ON exhibit_suggestion_resolutions(packet_id);
+      `);
+    }
+  },
+  {
+    id: "0011_exhibit_packet_exports",
+    description: "Persist combined exhibit packet PDF exports and manifests",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS exhibit_packet_exports (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+          packet_id TEXT NOT NULL REFERENCES exhibit_packets(id) ON DELETE CASCADE,
+          status TEXT NOT NULL,
+          export_type TEXT NOT NULL DEFAULT 'packet_pdf',
+          pdf_relative_path TEXT,
+          manifest_json TEXT,
+          error_text TEXT,
+          page_count INTEGER,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          completed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_exhibit_packet_exports_case ON exhibit_packet_exports(case_id);
+        CREATE INDEX IF NOT EXISTS idx_exhibit_packet_exports_packet ON exhibit_packet_exports(packet_id);
+      `);
+    }
+  },
+  {
+    id: "0012_user_document_templates",
+    description: "User-authored document templates and filled renders per case",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS user_document_templates (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          description TEXT,
+          body_markdown TEXT NOT NULL DEFAULT '',
+          fields_json TEXT NOT NULL DEFAULT '[]',
+          ai_hints TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_document_templates_case ON user_document_templates(case_id);
+
+        CREATE TABLE IF NOT EXISTS user_document_template_fills (
+          id TEXT PRIMARY KEY,
+          template_id TEXT NOT NULL REFERENCES user_document_templates(id) ON DELETE CASCADE,
+          case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+          values_json TEXT NOT NULL,
+          rendered_markdown TEXT NOT NULL,
+          source_item_id TEXT REFERENCES source_items(id) ON DELETE SET NULL,
+          status TEXT NOT NULL DEFAULT 'draft',
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_document_template_fills_case ON user_document_template_fills(case_id);
+        CREATE INDEX IF NOT EXISTS idx_user_document_template_fills_template ON user_document_template_fills(template_id);
+      `);
+    }
+  },
+  {
+    id: "0013_user_document_template_fills_updated_at",
+    description: "Add updated_at to template fills for edit tracking",
+    up(db) {
+      addColumnIfMissing(db, "user_document_template_fills", "updated_at", "updated_at TEXT DEFAULT CURRENT_TIMESTAMP");
+      db.exec(`
+        UPDATE user_document_template_fills
+        SET updated_at = COALESCE(NULLIF(updated_at, ''), created_at)
+        WHERE updated_at IS NULL OR updated_at = '';
+      `);
+    }
   }
 ];

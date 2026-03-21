@@ -12,6 +12,7 @@ import { useDocumentTypes } from "@/hooks/useDocumentTypes";
 import { useOverrideClassification, useResolveOcrReview, useReviewQueue } from "@/hooks/useReviewQueue";
 import { formatDateTime, formatLabel, truncateMiddle } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
+import { StatePanel } from "@/components/case/StatePanel";
 
 export function CaseReviewPage() {
   const { caseId } = useParams();
@@ -45,7 +46,7 @@ export function CaseReviewPage() {
   }
 
   if (error) {
-    return <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error instanceof Error ? error.message : "Review queue failed to load."}</div>;
+    return <StatePanel variant="error" message={error instanceof Error ? error.message : "Review queue failed to load."} />;
   }
 
   return (
@@ -158,9 +159,7 @@ export function CaseReviewPage() {
               </div>
             ))
           ) : (
-            <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-              No OCR review items are waiting in this matter.
-            </div>
+            <StatePanel message="No OCR review items are waiting in this matter." />
           )}
         </CardContent>
       </Card>
@@ -242,9 +241,7 @@ export function CaseReviewPage() {
               </div>
             ))
           ) : (
-            <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-              No unclassified documents in this matter.
-            </div>
+            <StatePanel message="No unclassified documents in this matter." />
           )}
         </CardContent>
       </Card>
@@ -266,9 +263,7 @@ export function CaseReviewPage() {
               </div>
             ))
           ) : (
-            <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-              No missing proof requirements are currently flagged.
-            </div>
+            <StatePanel message="No missing proof requirements are currently flagged." />
           )}
         </CardContent>
       </Card>

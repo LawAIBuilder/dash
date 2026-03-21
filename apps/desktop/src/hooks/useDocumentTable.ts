@@ -35,7 +35,7 @@ export function useDocumentTable(projection: MatterProjection | null) {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
   const rows = useMemo<DocumentTableRow[]>(() => {
-    if (!projection) {
+    if (!projection?.slices) {
       return [];
     }
 

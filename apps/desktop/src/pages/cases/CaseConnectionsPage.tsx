@@ -7,11 +7,20 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { useProjection } from "@/hooks/useProjection";
 import { useCaseActions } from "@/hooks/useCaseActions";
-import { useOcrWorkerHealth, useProbeBoxJwt } from "@/hooks/useConnections";
+import {
+  useOcrWorkerHealth,
+  usePracticePantherMatters,
+  usePracticePantherStatus,
+  useProbeBoxJwt,
+  useStartPracticePantherAuth,
+  useSyncPracticePanther
+} from "@/hooks/useConnections";
 import { useCaseDetail, useUpdateCase } from "@/hooks/useCaseDetail";
 import { formatDateTime, formatLabel, truncateMiddle } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
+import { StatePanel } from "@/components/case/StatePanel";
 import { useEffect, useState } from "react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export function CaseConnectionsPage() {
   const { caseId } = useParams();
@@ -19,23 +28,66 @@ export function CaseConnectionsPage() {
   const { syncMutation } = useCaseActions(caseId);
   const probeMutation = useProbeBoxJwt(caseId);
   const workerHealth = useOcrWorkerHealth();
+  const ppStatus = usePracticePantherStatus();
   const caseDetail = useCaseDetail(caseId);
   const updateCaseMutation = useUpdateCase(caseId);
+  const startPpAuth = useStartPracticePantherAuth(caseId);
+  const syncPracticePanther = useSyncPracticePanther(caseId);
   const [rootFolderId, setRootFolderId] = useState("");
+  const [ppMatterId, setPpMatterId] = useState("");
+  const [ppSearchText, setPpSearchText] = useState("");
+  const ppMatters = usePracticePantherMatters(Boolean(ppStatus.data?.connection?.status === "active"), ppSearchText);
 
   const caseHeader = projection?.slices.case_header ?? null;
   const connection = projection?.slices.source_connection_slice?.connections[0] ?? null;
-  const ocrSummary = projection?.slices.document_inventory_slice.ocr_summary ?? null;
+  const ppConnection = ppStatus.data?.connection ?? null;
+  const ocrSummary = projection?.slices.document_inventory_slice?.ocr_summary ?? null;
   const queuedPages = ocrSummary?.by_ocr_status?.queued ?? 0;
   const processingPages = ocrSummary?.by_ocr_status?.processing ?? 0;
   const reviewPages = ocrSummary?.review_required_count ?? 0;
+  const workerHealthLabel = workerHealth.isLoading
+    ? "Loading"
+    : workerHealth.isError
+      ? "Unavailable"
+      : workerHealth.data?.stale
+        ? "Stale"
+        : workerHealth.data?.worker
+          ? "Healthy"
+          : "Unavailable";
+  const workerHealthVariant =
+    workerHealth.isError || workerHealthLabel === "Unavailable"
+      ? "secondary"
+      : workerHealthLabel === "Stale"
+        ? "destructive"
+        : "outline";
 
   useEffect(() => {
     setRootFolderId(caseDetail.data?.box_root_folder_id ?? caseHeader?.box_root_folder_id ?? "");
   }, [caseDetail.data?.box_root_folder_id, caseHeader?.box_root_folder_id]);
 
+  useEffect(() => {
+    setPpMatterId(caseDetail.data?.pp_matter_id ?? caseHeader?.pp_matter_id ?? "");
+  }, [caseDetail.data?.pp_matter_id, caseHeader?.pp_matter_id]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const authState = url.searchParams.get("pp_auth");
+    const authError = url.searchParams.get("pp_error");
+    if (authState === "success") {
+      toast.success("PracticePanther connected");
+      url.searchParams.delete("pp_auth");
+      url.searchParams.delete("pp_error");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    } else if (authState === "error") {
+      toast.error(authError || "PracticePanther authentication failed");
+      url.searchParams.delete("pp_auth");
+      url.searchParams.delete("pp_error");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    }
+  }, []);
+
   if (error) {
-    return <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}</div>;
+    return <StatePanel variant="error" message={error} />;
   }
 
   if (isLoading) {
@@ -50,6 +102,39 @@ export function CaseConnectionsPage() {
       toast.success("Box root folder updated");
     } catch (updateError) {
       toast.error(updateError instanceof Error ? updateError.message : "Failed to update case");
+    }
+  }
+
+  async function savePracticePantherMatter() {
+    try {
+      await updateCaseMutation.mutateAsync({
+        pp_matter_id: ppMatterId.trim() || null
+      });
+      toast.success("PracticePanther matter link updated");
+    } catch (updateError) {
+      toast.error(updateError instanceof Error ? updateError.message : "Failed to update PP matter");
+    }
+  }
+
+  async function beginPracticePantherAuth() {
+    try {
+      const result = await startPpAuth.mutateAsync({
+        return_to: window.location.href
+      });
+      window.location.assign(result.authorization_url);
+    } catch (authError) {
+      toast.error(authError instanceof Error ? authError.message : "PracticePanther auth start failed");
+    }
+  }
+
+  async function runPracticePantherSync() {
+    try {
+      await syncPracticePanther.mutateAsync({
+        pp_matter_id: ppMatterId.trim() || null
+      });
+      toast.success("PracticePanther sync completed");
+    } catch (syncError) {
+      toast.error(syncError instanceof Error ? syncError.message : "PracticePanther sync failed");
     }
   }
 
@@ -173,9 +258,7 @@ export function CaseConnectionsPage() {
               </>
             ) : (
               <>
-                <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-                  No Box connection has been established for this matter yet. Set the root folder, probe JWT access, and run the first sync from here.
-                </div>
+                <StatePanel message="No Box connection has been established for this matter yet. Set the root folder, probe JWT access, and run the first sync from here." />
                 <div className="space-y-2 rounded-lg border p-4">
                   <div className="text-sm text-muted-foreground">Matter Box root folder</div>
                   <div className="flex gap-2">
@@ -268,8 +351,8 @@ export function CaseConnectionsPage() {
                 <div className="rounded-lg border p-4">
                   <div className="text-sm text-muted-foreground">Worker health</div>
                   <div className="mt-1 flex items-center gap-2">
-                    <Badge variant={workerHealth.data?.stale ? "destructive" : "outline"}>
-                      {workerHealth.data?.stale ? "Stale" : "Healthy"}
+                    <Badge variant={workerHealthVariant}>
+                      {workerHealthLabel}
                     </Badge>
                   </div>
                 </div>
@@ -287,20 +370,111 @@ export function CaseConnectionsPage() {
           <Card>
           <CardHeader>
             <CardTitle>PracticePanther</CardTitle>
-            <CardDescription>Product placeholder until the production OAuth + sync path is implemented.</CardDescription>
+            <CardDescription>Production OAuth + matter sync for PracticePanther.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-              PracticePanther production sync is not wired yet. The roadmap reserves this for Milestone 2 once the Box-first lawyer workspace is stable.
+            <div className="rounded-lg border p-4">
+              <div className="text-sm text-muted-foreground">OAuth redirect URI</div>
+              <div className="mt-1 break-all text-sm font-medium">
+                {ppStatus.data?.redirect_uri ?? "Unavailable"}
+              </div>
             </div>
-            {caseHeader?.pp_matter_id ? (
-              <div className="rounded-lg border p-4">
-                <div className="text-sm text-muted-foreground">Linked PP matter ID</div>
-                <div className="mt-1 font-medium">{truncateMiddle(caseHeader.pp_matter_id, 12, 8)}</div>
+
+            {!ppStatus.data?.configured ? (
+              <StatePanel message="PracticePanther OAuth is not fully configured yet. Set PP_CLIENT_ID, PP_CLIENT_SECRET, and the redirect URI on the API service." />
+            ) : null}
+
+            {ppConnection ? (
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-lg border p-4">
+                  <div className="text-sm text-muted-foreground">Connection status</div>
+                  <div className="mt-1 flex items-center gap-2">
+                    <Badge>{formatLabel(ppConnection.status)}</Badge>
+                    <Badge variant="outline">{formatLabel(ppConnection.auth_mode)}</Badge>
+                  </div>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <div className="text-sm text-muted-foreground">Account</div>
+                  <div className="mt-1 font-medium">
+                    {ppConnection.external_account_id ?? ppConnection.account_label ?? "Not connected"}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {ppConnection.last_verified_at ? formatDateTime(ppConnection.last_verified_at) : "Not verified yet"}
+                  </div>
+                </div>
               </div>
             ) : (
-              <div className="text-sm text-muted-foreground">No PP matter is linked to this case yet.</div>
+              <StatePanel message="No PracticePanther connection has been established yet." />
             )}
+
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="outline"
+                disabled={!ppStatus.data?.configured || startPpAuth.isPending}
+                onClick={() => void beginPracticePantherAuth()}
+              >
+                {startPpAuth.isPending
+                  ? "Redirecting…"
+                  : ppConnection?.status === "active"
+                    ? "Reconnect PracticePanther"
+                    : "Connect PracticePanther"}
+              </Button>
+              {ppConnection?.authorization_url ? (
+                <Button variant="outline" asChild>
+                  <a href={ppConnection.authorization_url} target="_blank" rel="noreferrer">
+                    Resume auth
+                    <ArrowUpRight className="ml-2 size-4" />
+                  </a>
+                </Button>
+              ) : null}
+            </div>
+
+            {ppConnection?.last_error_message ? (
+              <StatePanel variant="error" message={ppConnection.last_error_message} />
+            ) : null}
+
+            <div className="space-y-2 rounded-lg border p-4">
+              <div className="text-sm text-muted-foreground">Linked PracticePanther matter</div>
+              {ppMatters.data?.length ? (
+                <Select value={ppMatterId} onValueChange={setPpMatterId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose a PracticePanther matter" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ppMatters.data.map((matter) => (
+                      <SelectItem key={matter.id} value={matter.id}>
+                        {(matter.display_name || matter.name || matter.id)}{matter.status ? ` • ${matter.status}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  placeholder="PracticePanther matter ID"
+                  value={ppMatterId}
+                  onChange={(event) => setPpMatterId(event.target.value)}
+                />
+              )}
+              <Input
+                placeholder="Search remote PP matters (optional)"
+                value={ppSearchText}
+                onChange={(event) => setPpSearchText(event.target.value)}
+              />
+              <div className="flex flex-wrap gap-2">
+                <Button variant="outline" disabled={updateCaseMutation.isPending} onClick={() => void savePracticePantherMatter()}>
+                  {updateCaseMutation.isPending ? "Saving…" : "Save linked PP matter"}
+                </Button>
+                <Button
+                  disabled={syncPracticePanther.isPending || !ppMatterId.trim()}
+                  onClick={() => void runPracticePantherSync()}
+                >
+                  {syncPracticePanther.isPending ? "Syncing…" : "Sync PracticePanther"}
+                </Button>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                The sync uses the linked PP matter plus account contacts, notes, tasks, events, emails, call logs, and relationships.
+              </div>
+            </div>
           </CardContent>
           </Card>
         </div>

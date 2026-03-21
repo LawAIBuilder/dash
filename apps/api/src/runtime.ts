@@ -35,6 +35,7 @@ export interface ConnectorAuthSessionInput {
   provider: "box" | "practicepanther";
   accountLabel?: string | null;
   scopes?: string[];
+  authMode?: string | null;
 }
 
 export interface CompleteConnectorAuthInput {
@@ -1310,13 +1311,14 @@ export function ensureSourceConnection(
     | undefined;
 
   const scopes = input.scopes ?? getSourceConnectorSpec(input.provider).defaultScopes;
+  const nextAuthMode = input.authMode ?? null;
 
   if (existing) {
     db.prepare(
       `
         UPDATE source_connections
         SET account_label = COALESCE(?, account_label),
-            auth_mode = 'development_local_process',
+            auth_mode = COALESCE(?, auth_mode, 'development_local_process'),
             scopes = ?,
             status = 'active',
             last_verified_at = CURRENT_TIMESTAMP,
@@ -1324,12 +1326,12 @@ export function ensureSourceConnection(
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `
-    ).run(input.accountLabel ?? existing.account_label, JSON.stringify(scopes), existing.id);
+    ).run(input.accountLabel ?? existing.account_label, nextAuthMode, JSON.stringify(scopes), existing.id);
 
     return {
       id: existing.id,
       provider: existing.provider,
-      auth_mode: "development_local_process",
+      auth_mode: (nextAuthMode ?? existing.auth_mode ?? "development_local_process"),
       scopes,
       status: "active"
     };
@@ -1341,14 +1343,14 @@ export function ensureSourceConnection(
       INSERT INTO source_connections
         (id, provider, account_label, auth_mode, scopes, status, last_verified_at, metadata_json, updated_at)
       VALUES
-        (?, ?, ?, 'development_local_process', ?, 'active', CURRENT_TIMESTAMP, '{}', CURRENT_TIMESTAMP)
+        (?, ?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, '{}', CURRENT_TIMESTAMP)
     `
-  ).run(id, input.provider, input.accountLabel ?? null, JSON.stringify(scopes));
+  ).run(id, input.provider, input.accountLabel ?? null, nextAuthMode ?? "development_local_process", JSON.stringify(scopes));
 
   return {
     id,
     provider: input.provider,
-    auth_mode: "development_local_process",
+    auth_mode: nextAuthMode ?? "development_local_process",
     scopes,
     status: "active"
   };

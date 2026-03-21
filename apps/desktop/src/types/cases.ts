@@ -91,3 +91,29 @@ export interface DocumentTypeListItem {
   exhibit_eligible?: number | null;
   mandatory_vlm_ocr?: number | null;
 }
+
+export interface PracticePantherConnectionStatus {
+  id: string;
+  provider: string;
+  account_label?: string | null;
+  auth_mode: string;
+  status: string;
+  authorization_url?: string | null;
+  external_account_id?: string | null;
+  last_error_message?: string | null;
+  last_verified_at?: string | null;
+  metadata_json?: string | null;
+}
+
+export interface PracticePantherMatterItem {
+  id: string;
+  name?: string | null;
+  display_name?: string | null;
+  number?: number | null;
+  status?: string | null;
+  updated_at?: string | null;
+  account_ref?: {
+    id?: string | null;
+    display_name?: string | null;
+  } | null;
+}
