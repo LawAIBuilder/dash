@@ -5,10 +5,8 @@
  */
 import { openDatabase } from "./db.js";
 import { runOcrWorkerLoop } from "./ocr-worker.js";
-import { seedFoundation } from "./seed.js";
 
 const db = openDatabase();
-seedFoundation(db);
 
 const maxPasses = Number(process.env.OCR_WORKER_MAX_PASSES ?? 100);
 
