@@ -230,9 +230,6 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
     auth_mode: string;
     status: string;
     scopes: string | null;
-    callback_state: string | null;
-    authorization_url: string | null;
-    metadata_json: string | null;
     last_error_message: string | null;
     last_verified_at: string | null;
     updated_at: string | null;
@@ -575,12 +572,13 @@ export function buildCaseProjection(db: Database.Database, caseId: string) {
       auth_mode: connection.auth_mode,
       status: connection.status,
       external_account_id: connection.external_account_id,
-      callback_state: connection.callback_state,
-      authorization_url: connection.authorization_url,
+      account_label: connection.account_label,
       last_error_message: connection.last_error_message,
       last_verified_at: connection.last_verified_at,
       latest_sync_status: connection.latest_sync_status,
       latest_sync_started_at: connection.latest_sync_started_at,
+      latest_sync_completed_at: connection.latest_sync_completed_at,
+      snapshot_count: connection.snapshot_count,
       source_item_count: connection.source_item_count
     })),
     sourceItems: sourceItems.map((item) => ({
