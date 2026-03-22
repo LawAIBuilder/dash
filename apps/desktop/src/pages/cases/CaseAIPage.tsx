@@ -19,7 +19,7 @@ import {
   useRunAIAssembly,
   useUpsertAIEventConfig
 } from "@/hooks/useAIAssembly";
-import { getDisplayErrorMessage, type AIEventConfig, type AIJob } from "@/lib/api-client";
+import { describeApiFailure, getDisplayErrorMessage, type AIEventConfig, type AIJob } from "@/lib/api-client";
 
 const PRESET_EVENT_TYPES = [
   { value: "239_conference", label: "239 Conference" },
@@ -41,6 +41,14 @@ function parseAIOutput(job: AIJob): Array<{ exhibit_label: string; title: string
   } catch {
     return [];
   }
+}
+
+function describeAIJobFailure(job: AIJob): string {
+  return describeApiFailure({
+    code: job.error_code,
+    message: job.error_message,
+    fallback: "AI assembly failed"
+  });
 }
 
 export function CaseAIPage() {
@@ -107,7 +115,7 @@ export function CaseAIPage() {
         toast.success("AI assembly completed");
         setExpandedJobId(job.id);
       } else if (job.status === "failed") {
-        toast.error(job.error_message ?? "AI assembly failed");
+        toast.error(describeAIJobFailure(job));
       }
     } catch (e) {
       toast.error(getDisplayErrorMessage(e, "Assembly failed"));
@@ -229,8 +237,8 @@ export function CaseAIPage() {
                     </button>
                     {expanded ? (
                       <div className="space-y-2 pt-2">
-                        {job.error_message ? (
-                          <StatePanel variant="error" message={job.error_message} />
+                        {job.error_message || job.error_code ? (
+                          <StatePanel variant="error" message={describeAIJobFailure(job)} />
                         ) : null}
                         {exhibits.map((exhibit, index) => (
                           <div key={index} className="rounded border bg-muted/20 p-3 text-sm space-y-1">
@@ -241,7 +249,7 @@ export function CaseAIPage() {
                             </div>
                           </div>
                         ))}
-                        {exhibits.length === 0 && !job.error_message ? (
+                        {exhibits.length === 0 && !job.error_message && !job.error_code ? (
                           <div className="text-sm text-muted-foreground">No exhibit recommendations in output.</div>
                         ) : null}
                       </div>

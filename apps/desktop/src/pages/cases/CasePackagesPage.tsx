@@ -22,7 +22,7 @@ import {
 } from "@/hooks/usePackages";
 import { useHearingPrepSnapshot } from "@/hooks/useHearingPrepSnapshot";
 import { useProjection } from "@/hooks/useProjection";
-import { exportPackageRunDocx } from "@/lib/api-client";
+import { describeApiFailure, exportPackageRunDocx, getDisplayErrorMessage } from "@/lib/api-client";
 import type { PackageRun } from "@/lib/api-client";
 import { formatDateTime, formatLabel } from "@/ui/formatters";
 import { toast } from "sonner";
@@ -92,6 +92,14 @@ function parseCitationsFromRun(run: PackageRun): PackageCitation[] {
     }
   }
   return [];
+}
+
+function describePackageRunFailure(run: PackageRun): string {
+  return describeApiFailure({
+    code: run.error_code,
+    message: run.error_message,
+    fallback: "Package run failed"
+  });
 }
 
 export function CasePackagesPage() {
@@ -276,7 +284,7 @@ export function CasePackagesPage() {
                         }
                       })
                       .then(() => toast.success("Target document updated"))
-                      .catch((e) => toast.error(e instanceof Error ? e.message : "Failed to update target document"))
+                      .catch((e) => toast.error(getDisplayErrorMessage(e, "Failed to update target document")))
                   }
                 >
                   <SelectTrigger>
@@ -318,7 +326,7 @@ export function CasePackagesPage() {
               <p className="text-muted-foreground text-sm">Loading hearing snapshot…</p>
             ) : hearingSnapshot.error ? (
               <p className="text-destructive text-sm">
-                {hearingSnapshot.error instanceof Error ? hearingSnapshot.error.message : "Hearing snapshot failed"}
+                {getDisplayErrorMessage(hearingSnapshot.error, "Hearing snapshot failed")}
               </p>
             ) : hearingSnapshot.data ? (
               <div className="space-y-3">
@@ -365,7 +373,12 @@ export function CasePackagesPage() {
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) upload.mutate(f);
+                if (f) {
+                  upload.mutate(f, {
+                    onSuccess: () => toast.success("Upload completed"),
+                    onError: (error) => toast.error(getDisplayErrorMessage(error, "Upload failed"))
+                  });
+                }
               }}
             />
           </label>
@@ -402,10 +415,12 @@ export function CasePackagesPage() {
                 { package_type: pkgType, rule_key: ruleKey.trim(), rule_label: ruleLabel.trim(), instructions: ruleInstr },
                 {
                   onSuccess: () => {
+                    toast.success("Rule added");
                     setRuleKey("");
                     setRuleLabel("");
                     setRuleInstr("");
-                  }
+                  },
+                  onError: (error) => toast.error(getDisplayErrorMessage(error, "Failed to add rule"))
                 }
               )
             }
@@ -419,7 +434,16 @@ export function CasePackagesPage() {
                   <div className="font-medium">{r.rule_label}</div>
                   <div className="text-muted-foreground text-xs">{r.instructions}</div>
                 </div>
-                <Button size="sm" variant="ghost" onClick={() => deleteRule.mutate(r.id)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    deleteRule.mutate(r.id, {
+                      onSuccess: () => toast.success("Rule removed"),
+                      onError: (error) => toast.error(getDisplayErrorMessage(error, "Failed to remove rule"))
+                    })
+                  }
+                >
                   Remove
                 </Button>
               </li>
@@ -445,7 +469,15 @@ export function CasePackagesPage() {
                 runWorker.mutate(
                   { packetId: activePacket.id },
                   {
-                    onSuccess: () => void refetchRuns()
+                    onSuccess: (run) => {
+                      if (run.status === "failed") {
+                        toast.error(describePackageRunFailure(run));
+                      } else {
+                        toast.success("Package run started");
+                      }
+                      void refetchRuns();
+                    },
+                    onError: (error) => toast.error(getDisplayErrorMessage(error, "Package run failed"))
                   }
                 )
               }
@@ -476,16 +508,7 @@ export function CasePackagesPage() {
                   "proof_to_relief_graph",
                   "hearing_readiness_checklist"
                 ].filter((key) => key in parsed.extra);
-                const interrogatoryCount =
-                  parsed.interrogatory_parse?.length ??
-                  (() => {
-                    try {
-                      const o = run.output_json ? (JSON.parse(run.output_json) as { interrogatory_parse?: unknown[] }) : null;
-                      return Array.isArray(o?.interrogatory_parse) ? o.interrogatory_parse.length : null;
-                    } catch {
-                      return null;
-                    }
-                  })();
+                const interrogatoryCount = parsed.interrogatory_parse?.length ?? null;
 
                 return (
                   <li key={run.id} className="rounded-lg border px-3 py-3 text-sm">
@@ -509,7 +532,7 @@ export function CasePackagesPage() {
                         onClick={() =>
                           exportPackageRunDocx(normalizedCaseId, run.id)
                             .then(() => toast.success("DOCX export written on server"))
-                            .catch((e) => toast.error(e instanceof Error ? e.message : "Export failed"))
+                            .catch((e) => toast.error(getDisplayErrorMessage(e, "Export failed")))
                         }
                       >
                         <FileDown className="mr-1 size-4" />
@@ -523,7 +546,7 @@ export function CasePackagesPage() {
                           approveRun
                             .mutateAsync({ runId: run.id })
                             .then(() => toast.success("Run approved for export"))
-                            .catch((e) => toast.error(e instanceof Error ? e.message : "Approval failed"))
+                            .catch((e) => toast.error(getDisplayErrorMessage(e, "Approval failed")))
                         }
                       >
                         Approve
@@ -540,7 +563,9 @@ export function CasePackagesPage() {
                         {run.latest_export_bytes != null ? `${run.latest_export_bytes} bytes` : "size unknown"}
                       </p>
                     ) : null}
-                    {run.error_message ? <div className="text-destructive mt-1 text-xs">{run.error_message}</div> : null}
+                    {run.error_message || run.error_code ? (
+                      <div className="text-destructive mt-1 text-xs">{describePackageRunFailure(run)}</div>
+                    ) : null}
 
                     {run.status === "completed" && run.output_json ? (
                       <div className="mt-4 grid gap-4 lg:grid-cols-3">
@@ -591,7 +616,7 @@ export function CasePackagesPage() {
                                     toast.success("Draft saved");
                                     void refetchRuns();
                                   },
-                                  onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed")
+                                  onError: (e) => toast.error(getDisplayErrorMessage(e, "Save failed"))
                                 }
                               )
                             }
@@ -674,7 +699,7 @@ export function CasePackagesPage() {
                   toast.success("Package created");
                   void refresh();
                 } catch (e) {
-                  toast.error(e instanceof Error ? e.message : "Failed to create package");
+                  toast.error(getDisplayErrorMessage(e, "Failed to create package"));
                 }
               }}
             >

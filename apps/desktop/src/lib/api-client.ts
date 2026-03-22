@@ -35,13 +35,19 @@ export class ApiError extends Error {
   status: number;
   isTimeout: boolean;
   retryAfterSeconds: number | null;
+  code: string | null;
 
-  constructor(message: string, status: number, options?: { isTimeout?: boolean; retryAfterSeconds?: number | null }) {
+  constructor(
+    message: string,
+    status: number,
+    options?: { isTimeout?: boolean; retryAfterSeconds?: number | null; code?: string | null }
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.isTimeout = options?.isTimeout ?? false;
     this.retryAfterSeconds = options?.retryAfterSeconds ?? null;
+    this.code = options?.code ?? null;
   }
 }
 
@@ -95,13 +101,25 @@ async function apiFetch(input: string | URL, init: ApiRequestInit = {}): Promise
   }
 }
 
-async function readErrorMessage(response: Response): Promise<string> {
-  const json = (await response.json().catch(() => null)) as { error?: string } | null;
-  if (typeof json?.error === "string" && json.error.trim()) {
-    return json.error;
-  }
+type ErrorPayload = {
+  error?: string;
+  code?: string;
+};
+
+async function readErrorPayload(response: Response): Promise<{ message: string; code: string | null }> {
   const text = await response.text().catch(() => "");
-  return text || `Request failed (${response.status})`;
+  if (!text) {
+    return { message: `Request failed (${response.status})`, code: null };
+  }
+
+  try {
+    const payload = JSON.parse(text) as ErrorPayload;
+    const message = typeof payload.error === "string" && payload.error.trim() ? payload.error : text;
+    const code = typeof payload.code === "string" && payload.code.trim() ? payload.code : null;
+    return { message, code };
+  } catch {
+    return { message: text, code: null };
+  }
 }
 
 function readRetryAfterSeconds(response: Response): number | null {
@@ -114,18 +132,21 @@ function readRetryAfterSeconds(response: Response): number | null {
 }
 
 async function readJson<T>(response: Response): Promise<T> {
-  const payload = (await response.json().catch(() => ({}))) as T & { error?: string };
+  const raw = await response.text().catch(() => "");
+  let payload = {} as T & ErrorPayload;
+  if (raw) {
+    try {
+      payload = JSON.parse(raw) as T & ErrorPayload;
+    } catch {
+      payload = {} as T & ErrorPayload;
+    }
+  }
   if (!response.ok) {
-    const message =
-      typeof (payload as { error?: string }).error === "string"
-        ? (payload as { error?: string }).error
-        : `Request failed (${response.status})`;
+    const message = typeof payload.error === "string" ? payload.error : raw || `Request failed (${response.status})`;
+    const code = typeof payload.code === "string" && payload.code.trim() ? payload.code : null;
     const retryAfterSeconds = readRetryAfterSeconds(response);
-    const suffix =
-      response.status === 429 && retryAfterSeconds
-        ? ` Retry in about ${retryAfterSeconds}s.`
-        : "";
-    throw new ApiError(`${message || `Request failed (${response.status})`}${suffix}`, response.status, {
+    throw new ApiError(message || `Request failed (${response.status})`, response.status, {
+      code,
       retryAfterSeconds
     });
   }
@@ -146,8 +167,67 @@ export function isRetryableApiError(error: unknown): boolean {
   return false;
 }
 
+function formatRetryAfterSeconds(seconds: number | null | undefined): string | null {
+  if (!seconds || seconds <= 0) {
+    return null;
+  }
+  if (seconds >= 3600) {
+    const hours = Math.round(seconds / 3600);
+    return `about ${hours}h`;
+  }
+  if (seconds >= 60) {
+    const minutes = Math.round(seconds / 60);
+    return `about ${minutes}m`;
+  }
+  return `about ${seconds}s`;
+}
+
+export function describeApiFailure({
+  code,
+  message,
+  retryAfterSeconds,
+  fallback
+}: {
+  code?: string | null;
+  message?: string | null;
+  retryAfterSeconds?: number | null;
+  fallback: string;
+}): string {
+  const retryHint = formatRetryAfterSeconds(retryAfterSeconds);
+  switch (code) {
+    case "daily_case_quota_exceeded":
+      return retryHint
+        ? `Daily limit for this matter reached. Try again in ${retryHint}.`
+        : "Daily limit for this matter reached. Try again tomorrow.";
+    case "missing_api_key":
+      return "The server is missing OPENAI_API_KEY for this action.";
+    case "provider_rate_limited":
+      return retryHint
+        ? `The AI provider rate-limited this request. Retry in ${retryHint}.`
+        : "The AI provider rate-limited this request. Try again shortly.";
+    case "provider_auth_failed":
+      return "The server's AI provider credentials were rejected.";
+    case "context_length_exceeded":
+      return "This request is too large for the current AI model context window.";
+    case "provider_connection_error":
+      return "The AI provider could not be reached. Check connectivity and retry.";
+    case "provider_server_error":
+      return "The AI provider returned a server error. Try again shortly.";
+    default:
+      return message?.trim() || fallback;
+  }
+}
+
 export function getDisplayErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError || error instanceof Error) {
+  if (error instanceof ApiError) {
+    return describeApiFailure({
+      code: error.code,
+      message: error.message,
+      retryAfterSeconds: error.retryAfterSeconds,
+      fallback
+    });
+  }
+  if (error instanceof Error) {
     return error.message || fallback;
   }
   if (typeof error === "string" && error.trim()) {
@@ -373,9 +453,9 @@ export async function resolveOcrReview(caseId: string, pageId: string, acceptEmp
   const response = await apiFetch(
     apiUrl(`/api/cases/${encodeURIComponent(caseId)}/canonical-pages/${encodeURIComponent(pageId)}/ocr-review/resolve`),
     {
-    method: "POST",
-    headers: buildApiHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({ accept_empty: acceptEmpty })
+      method: "POST",
+      headers: buildApiHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ accept_empty: acceptEmpty })
     }
   );
   return readJson<Record<string, unknown>>(response);
@@ -385,9 +465,9 @@ export async function overrideClassification(caseId: string, sourceItemId: strin
   const response = await apiFetch(
     apiUrl(`/api/cases/${encodeURIComponent(caseId)}/source-items/${encodeURIComponent(sourceItemId)}/classification`),
     {
-    method: "PATCH",
-    headers: buildApiHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify(documentTypeId ? { document_type_id: documentTypeId } : { clear: true })
+      method: "PATCH",
+      headers: buildApiHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(documentTypeId ? { document_type_id: documentTypeId } : { clear: true })
     }
   );
   return readJson<Record<string, unknown>>(response);
@@ -397,18 +477,14 @@ export async function previewFile(caseId: string, sourceItemId: string): Promise
   const response = await apiFetch(
     apiUrl(`/api/cases/${encodeURIComponent(caseId)}/source-items/${encodeURIComponent(sourceItemId)}/content`),
     {
-    headers: buildApiHeaders(),
-    timeoutMs: LONG_API_TIMEOUT_MS
+      headers: buildApiHeaders(),
+      timeoutMs: LONG_API_TIMEOUT_MS
     }
   );
   if (!response.ok) {
     const retryAfterSeconds = readRetryAfterSeconds(response);
-    const message = await readErrorMessage(response);
-    throw new ApiError(
-      `${message}${response.status === 429 && retryAfterSeconds ? ` Retry in about ${retryAfterSeconds}s.` : ""}`,
-      response.status,
-      { retryAfterSeconds }
-    );
+    const { message, code } = await readErrorPayload(response);
+    throw new ApiError(message, response.status, { code, retryAfterSeconds });
   }
   return response.blob();
 }
@@ -709,12 +785,8 @@ export async function downloadPacketExportPdf(caseId: string, exportId: string):
   );
   if (!response.ok) {
     const retryAfterSeconds = readRetryAfterSeconds(response);
-    const message = await readErrorMessage(response);
-    throw new ApiError(
-      `${message}${response.status === 429 && retryAfterSeconds ? ` Retry in about ${retryAfterSeconds}s.` : ""}`,
-      response.status,
-      { retryAfterSeconds }
-    );
+    const { message, code } = await readErrorPayload(response);
+    throw new ApiError(message, response.status, { code, retryAfterSeconds });
   }
   return response.blob();
 }

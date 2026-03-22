@@ -31,7 +31,7 @@ import { formatDateTime, formatLabel } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
 import { StatePanel } from "@/components/case/StatePanel";
 import type { ExhibitItem, ExhibitSection, ExhibitSlot, PacketPdfExportLayout } from "@/types/exhibits";
-import { downloadPacketExportPdf } from "@/lib/api-client";
+import { downloadPacketExportPdf, getDisplayErrorMessage } from "@/lib/api-client";
 
 function canGeneratePacketPdf(status: string) {
   return status === "finalized" || status === "needs_review" || status === "exported";
@@ -365,7 +365,12 @@ export function CaseExhibitsPage() {
   );
 
   if (projectionError || workspace.error) {
-    return <StatePanel variant="error" message={projectionError ?? (workspace.error instanceof Error ? workspace.error.message : "Failed to load exhibit workspace.")} />;
+    return (
+      <StatePanel
+        variant="error"
+        message={projectionError ?? getDisplayErrorMessage(workspace.error, "Failed to load exhibit workspace.")}
+      />
+    );
   }
 
   if (projectionLoading || workspace.isLoading) {
@@ -377,7 +382,7 @@ export function CaseExhibitsPage() {
       await createPacket.mutateAsync({ packet_name: "Hearing Packet", packet_mode: "full", naming_scheme: "letters" });
       toast.success("Exhibit packet created");
     } catch (createError) {
-      toast.error(createError instanceof Error ? createError.message : "Failed to create exhibit packet");
+      toast.error(getDisplayErrorMessage(createError, "Failed to create exhibit packet"));
     }
   }
 
@@ -391,7 +396,7 @@ export function CaseExhibitsPage() {
         input: { packet_mode: value === "compact" ? "compact" : "full" }
       });
     } catch (updateError) {
-      toast.error(updateError instanceof Error ? updateError.message : "Failed to update packet mode");
+      toast.error(getDisplayErrorMessage(updateError, "Failed to update packet mode"));
     }
   }
 
@@ -412,7 +417,7 @@ export function CaseExhibitsPage() {
       setSlotDialogSectionId(null);
       setSlotForm({ exhibit_label: "", title: "" });
     } catch (createError) {
-      toast.error(createError instanceof Error ? createError.message : "Failed to create exhibit slot");
+      toast.error(getDisplayErrorMessage(createError, "Failed to create exhibit slot"));
     }
   }
 
@@ -421,7 +426,7 @@ export function CaseExhibitsPage() {
       await addItem.mutateAsync({ exhibitId: slotId, sourceItemId });
       toast.success("Document added to exhibit");
     } catch (addError) {
-      toast.error(addError instanceof Error ? addError.message : "Failed to add document to exhibit");
+      toast.error(getDisplayErrorMessage(addError, "Failed to add document to exhibit"));
     }
   }
 
@@ -430,7 +435,7 @@ export function CaseExhibitsPage() {
       await removeItem.mutateAsync(itemId);
       toast.success("Document removed from exhibit");
     } catch (removeError) {
-      toast.error(removeError instanceof Error ? removeError.message : "Failed to remove exhibit item");
+      toast.error(getDisplayErrorMessage(removeError, "Failed to remove exhibit item"));
     }
   }
 
@@ -446,7 +451,7 @@ export function CaseExhibitsPage() {
       toast.success("Page exclusions updated");
       setPageRuleState({ item: null, pageIds: [], excludedPageIds: [], open: false });
     } catch (saveError) {
-      toast.error(saveError instanceof Error ? saveError.message : "Failed to update page exclusions");
+      toast.error(getDisplayErrorMessage(saveError, "Failed to update page exclusions"));
     }
   }
 
@@ -462,7 +467,7 @@ export function CaseExhibitsPage() {
           : "Packet finalized"
       );
     } catch (finalizeError) {
-      toast.error(finalizeError instanceof Error ? finalizeError.message : "Packet finalization failed");
+      toast.error(getDisplayErrorMessage(finalizeError, "Packet finalization failed"));
     }
   }
 
@@ -486,7 +491,7 @@ export function CaseExhibitsPage() {
       const result = await generatePacketPdf.mutateAsync({ packetId: packet.id, layout });
       toast.success(`Combined PDF ready — ${result.page_count} page${result.page_count === 1 ? "" : "s"}`);
     } catch (genError) {
-      toast.error(genError instanceof Error ? genError.message : "Packet PDF generation failed");
+      toast.error(getDisplayErrorMessage(genError, "Packet PDF generation failed"));
     }
   }
 
@@ -506,7 +511,7 @@ export function CaseExhibitsPage() {
       URL.revokeObjectURL(url);
       toast.success("Download started");
     } catch (downloadError) {
-      toast.error(downloadError instanceof Error ? downloadError.message : "Download failed");
+      toast.error(getDisplayErrorMessage(downloadError, "Download failed"));
     } finally {
       setDownloadingExportId(null);
     }
@@ -534,7 +539,7 @@ export function CaseExhibitsPage() {
       await resolveSuggestion.mutateAsync({ packetId: packet.id, suggestionId, action });
       toast.success(action === "accept" ? "Suggestion accepted" : "Suggestion dismissed");
     } catch (resolveError) {
-      toast.error(resolveError instanceof Error ? resolveError.message : "Failed to resolve suggestion");
+      toast.error(getDisplayErrorMessage(resolveError, "Failed to resolve suggestion"));
     }
   }
 
@@ -550,7 +555,7 @@ export function CaseExhibitsPage() {
       toast.success("Document assigned to exhibit");
       setAssignState({ sourceItemId: null, sourceTitle: "", selectedExhibitId: "", open: false });
     } catch (assignError) {
-      toast.error(assignError instanceof Error ? assignError.message : "Failed to assign document");
+      toast.error(getDisplayErrorMessage(assignError, "Failed to assign document"));
     }
   }
 
@@ -572,7 +577,7 @@ export function CaseExhibitsPage() {
         sectionIds: next.map((section) => section.id)
       });
     } catch (reorderError) {
-      toast.error(reorderError instanceof Error ? reorderError.message : "Failed to reorder sections");
+      toast.error(getDisplayErrorMessage(reorderError, "Failed to reorder sections"));
     }
   }
 
@@ -591,7 +596,7 @@ export function CaseExhibitsPage() {
         exhibitIds: next.map((slot) => slot.id)
       });
     } catch (reorderError) {
-      toast.error(reorderError instanceof Error ? reorderError.message : "Failed to reorder exhibits");
+      toast.error(getDisplayErrorMessage(reorderError, "Failed to reorder exhibits"));
     }
   }
 
@@ -815,7 +820,7 @@ export function CaseExhibitsPage() {
                 <div className="text-sm text-muted-foreground">Loading export history…</div>
               ) : packetExports.error ? (
                 <div className="text-sm text-destructive">
-                  {packetExports.error instanceof Error ? packetExports.error.message : "Failed to load exports"}
+                  {getDisplayErrorMessage(packetExports.error, "Failed to load exports")}
                 </div>
               ) : !packetExports.data?.length ? (
                 <div className="text-sm text-muted-foreground">No exports yet. Generate a combined packet PDF to see it here.</div>
