@@ -18,16 +18,7 @@ import {
   recordRegressionCheck,
   resolveCanonicalPageOcrReview
 } from "../runtime.js";
-
-type ReplyLike = {
-  header: (name: string, value: string | number) => unknown;
-  code: (statusCode: number) => { send: (body: unknown) => unknown };
-  send: (body: unknown) => unknown;
-};
-
-type CaseReplyLike = {
-  code: (statusCode: number) => { send: (body: unknown) => unknown };
-};
+import type { CaseRouteReply, HeaderRouteReply, StreamingRouteReply } from "./types.js";
 
 type SourceItemBinaryContext = {
   id: string;
@@ -43,12 +34,12 @@ type SourceItemBinaryContext = {
 export interface RegisterCaseDataRoutesInput {
   app: FastifyInstance;
   db: Database.Database;
-  assertCanonicalPageBelongsToCase: (caseId: string, canonicalPageId: string, reply: CaseReplyLike) => boolean;
-  assertCaseExists: (caseId: string, reply: CaseReplyLike) => boolean;
-  assertSourceItemBelongsToCase: (caseId: string, sourceItemId: string, reply: CaseReplyLike) => boolean;
+  assertCanonicalPageBelongsToCase: (caseId: string, canonicalPageId: string, reply: CaseRouteReply) => boolean;
+  assertCaseExists: (caseId: string, reply: CaseRouteReply) => boolean;
+  assertSourceItemBelongsToCase: (caseId: string, sourceItemId: string, reply: CaseRouteReply) => boolean;
   enforceExpensiveRouteRateLimit: (
     request: { ip: string },
-    reply: ReplyLike,
+    reply: HeaderRouteReply,
     bucket: string
   ) => boolean;
   fetchPdfBytesForSourceItem: (sourceItemId: string) => Promise<Buffer>;
@@ -71,7 +62,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
 
   app.get("/api/cases/:caseId/source-items/:sourceItemId/content", async (request, reply) => {
     const { caseId, sourceItemId } = request.params as { caseId: string; sourceItemId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!assertCaseExists(caseId, reply as StreamingRouteReply)) return;
     const sourceItem = readSourceItemBinaryContext(sourceItemId);
     if (!sourceItem || sourceItem.case_id !== caseId) {
       return reply.code(404).send({ ok: false, error: "source item not found" });

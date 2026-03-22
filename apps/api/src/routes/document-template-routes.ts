@@ -18,23 +18,20 @@ import {
   updateUserDocumentTemplate,
   validateValuesPayload
 } from "../document-templates.js";
-
-type RequireCaseReply = {
-  code: (statusCode: number) => { send: (body: unknown) => unknown };
-};
+import type { CaseRouteReply } from "./types.js";
 
 export interface RegisterDocumentTemplateRoutesInput {
   app: FastifyInstance;
   db: Database.Database;
-  requireCase: (caseId: string, reply: RequireCaseReply) => boolean;
+  assertCaseExists: (caseId: string, reply: CaseRouteReply) => boolean;
 }
 
 export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRoutesInput) {
-  const { app, db, requireCase } = input;
+  const { app, db, assertCaseExists } = input;
 
   app.get("/api/cases/:caseId/document-templates", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const rows = listUserDocumentTemplates(db, caseId);
@@ -47,7 +44,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.post("/api/cases/:caseId/document-templates", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const body = request.body as
@@ -79,7 +76,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.get("/api/cases/:caseId/document-templates/:templateId", async (request, reply) => {
     const { caseId, templateId } = request.params as { caseId: string; templateId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const row = getUserDocumentTemplate(db, templateId, caseId);
@@ -91,7 +88,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.patch("/api/cases/:caseId/document-templates/:templateId", async (request, reply) => {
     const { caseId, templateId } = request.params as { caseId: string; templateId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const body = request.body as
@@ -123,7 +120,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.delete("/api/cases/:caseId/document-templates/:templateId", async (request, reply) => {
     const { caseId, templateId } = request.params as { caseId: string; templateId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const deleted = deleteUserDocumentTemplate(db, templateId, caseId);
@@ -135,7 +132,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.post("/api/cases/:caseId/document-templates/:templateId/render", async (request, reply) => {
     const { caseId, templateId } = request.params as { caseId: string; templateId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const template = getUserDocumentTemplate(db, templateId, caseId);
@@ -190,7 +187,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.get("/api/cases/:caseId/document-template-fills", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const q = request.query as { template_id?: string };
@@ -205,7 +202,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.get("/api/cases/:caseId/document-template-fills/:fillId", async (request, reply) => {
     const { caseId, fillId } = request.params as { caseId: string; fillId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const row = getTemplateFill(db, fillId, caseId);
@@ -217,7 +214,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.patch("/api/cases/:caseId/document-template-fills/:fillId", async (request, reply) => {
     const { caseId, fillId } = request.params as { caseId: string; fillId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const body = request.body as
@@ -251,7 +248,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.delete("/api/cases/:caseId/document-template-fills/:fillId", async (request, reply) => {
     const { caseId, fillId } = request.params as { caseId: string; fillId: string };
-    if (!requireCase(caseId, reply)) {
+    if (!assertCaseExists(caseId, reply)) {
       return;
     }
     const deleted = deleteTemplateFill(db, fillId, caseId);

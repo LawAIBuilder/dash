@@ -31,15 +31,7 @@ import {
   getFullCanonicalTextForSourceItemInCase,
   getPageChunksInCase
 } from "../retrieval.js";
-
-type ReplyLike = {
-  header: (name: string, value: string | number) => unknown;
-  code: (statusCode: number) => { send: (body: unknown) => unknown };
-};
-
-type CaseReplyLike = {
-  code: (statusCode: number) => { send: (body: unknown) => unknown };
-};
+import type { CaseRouteReply, HeaderRouteReply } from "./types.js";
 
 export interface RegisterPackageWorkbenchRoutesInput {
   app: FastifyInstance;
@@ -47,14 +39,14 @@ export interface RegisterPackageWorkbenchRoutesInput {
   aiAssembleDailyLimit: number;
   packageExportDailyLimit: number;
   packageRunDailyLimit: number;
-  assertCaseExists: (caseId: string, reply: CaseReplyLike) => boolean;
-  assertPackageRuleBelongsToCase: (caseId: string, ruleId: string, reply: CaseReplyLike) => boolean;
-  assertPackageRunBelongsToCase: (caseId: string, runId: string, reply: CaseReplyLike) => boolean;
-  assertPacketBelongsToCase: (caseId: string, packetId: string, reply: CaseReplyLike) => boolean;
-  assertSourceItemBelongsToCase: (caseId: string, sourceItemId: string, reply: CaseReplyLike) => boolean;
-  assertSourceItemsBelongToCase: (caseId: string, sourceItemIds: string[], reply: CaseReplyLike) => boolean;
+  assertCaseExists: (caseId: string, reply: CaseRouteReply) => boolean;
+  assertPackageRuleBelongsToCase: (caseId: string, ruleId: string, reply: CaseRouteReply) => boolean;
+  assertPackageRunBelongsToCase: (caseId: string, runId: string, reply: CaseRouteReply) => boolean;
+  assertPacketBelongsToCase: (caseId: string, packetId: string, reply: CaseRouteReply) => boolean;
+  assertSourceItemBelongsToCase: (caseId: string, sourceItemId: string, reply: CaseRouteReply) => boolean;
+  assertSourceItemsBelongToCase: (caseId: string, sourceItemIds: string[], reply: CaseRouteReply) => boolean;
   enforceCaseDailyUsageLimit: (
-    reply: ReplyLike,
+    reply: HeaderRouteReply,
     input: {
       caseId: string;
       counterKey: string;
@@ -64,7 +56,7 @@ export interface RegisterPackageWorkbenchRoutesInput {
   ) => boolean;
   enforceExpensiveRouteRateLimit: (
     request: { ip: string },
-    reply: ReplyLike,
+    reply: HeaderRouteReply,
     bucket: string
   ) => boolean;
 }
