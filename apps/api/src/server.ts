@@ -4,8 +4,14 @@ import helmet from "@fastify/helmet";
 import Fastify from "fastify";
 import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
+import {
+  ensureBootstrapAdminUser,
+  isSessionAuthEnabled,
+  resolveAuthenticatedUser
+} from "./auth.js";
 import { openDatabase } from "./db.js";
 import { getEffectivePaths, validateConfiguredPaths, validateStartupReadiness } from "./readiness.js";
+import { registerAuthRoutes } from "./routes/auth-routes.js";
 import { registerCaseCatalogRoutes } from "./routes/case-catalog-routes.js";
 import { createCaseRouteGuards } from "./routes/case-guards.js";
 import { registerCaseDataRoutes } from "./routes/case-data-routes.js";
@@ -45,6 +51,7 @@ if (!pathValidation.ok) {
 
 const db = openDatabase();
 seedFoundation(db);
+const bootstrapAdmin = ensureBootstrapAdminUser(db);
 const startupRecovery = {
   stale_sync_runs_reconciled: reconcileStaleSyncRuns(db),
   stale_packet_exports_reconciled: reconcileStalePacketExports(db)
@@ -173,7 +180,8 @@ const configuredOrigins = process.env.WC_CORS_ORIGIN?.split(",")
   .map((origin) => origin.trim())
   .filter((origin) => origin.length > 0);
 await app.register(cors, {
-  origin: configuredOrigins && configuredOrigins.length > 0 ? configuredOrigins : ["http://127.0.0.1:5173", "http://localhost:5173"]
+  origin: configuredOrigins && configuredOrigins.length > 0 ? configuredOrigins : ["http://127.0.0.1:5173", "http://localhost:5173"],
+  credentials: true
 });
 await app.register(helmet, {
   contentSecurityPolicy: false,
@@ -186,21 +194,44 @@ await app.register(multipart, {
 });
 
 const WC_API_KEY = process.env.WC_API_KEY?.trim();
-if (WC_API_KEY) {
-  app.addHook("onRequest", async (request, reply) => {
-    const path = request.url.split("?")[0] ?? "";
-    if (
-      request.method === "OPTIONS" ||
-      path === "/health" ||
-      path === "/api/connectors/practicepanther/callback"
-    ) {
-      return;
-    }
-    const auth = request.headers.authorization;
-    if (auth !== `Bearer ${WC_API_KEY}`) {
-      return reply.code(401).send({ ok: false, error: "Unauthorized" });
-    }
-  });
+const SESSION_AUTH_ENABLED = isSessionAuthEnabled();
+const API_KEY_FALLBACK_ENABLED = Boolean(WC_API_KEY);
+app.addHook("onRequest", async (request, reply) => {
+  request.user = resolveAuthenticatedUser(db, request);
+  request.authMode = request.user ? "session" : "none";
+
+  const path = request.url.split("?")[0] ?? "";
+  if (
+    request.method === "OPTIONS" ||
+    path === "/health" ||
+    path === "/api/connectors/practicepanther/callback" ||
+    path === "/api/auth/login" ||
+    path === "/api/auth/logout" ||
+    path === "/api/auth/session"
+  ) {
+    return;
+  }
+
+  if (request.user) {
+    return;
+  }
+
+  const auth = request.headers.authorization;
+  if (WC_API_KEY && auth === `Bearer ${WC_API_KEY}`) {
+    request.authMode = "api_key";
+    return;
+  }
+
+  if (API_KEY_FALLBACK_ENABLED || SESSION_AUTH_ENABLED) {
+    return reply.code(401).send({ ok: false, error: "Unauthorized" });
+  }
+});
+
+if (!API_KEY_FALLBACK_ENABLED && !SESSION_AUTH_ENABLED) {
+  app.log.warn("No API auth mode is configured; server routes are open because neither WC_API_KEY nor WC_SESSION_SECRET is set");
+}
+if (bootstrapAdmin.configured) {
+  app.log.info(bootstrapAdmin, "bootstrap admin auth evaluated");
 }
 
 const ENABLE_DEV_ROUTES = readDevRoutesEnabled();
@@ -294,6 +325,12 @@ registerOpsRoutes({
   app,
   db,
   startupRecovery
+});
+
+registerAuthRoutes({
+  app,
+  db,
+  apiKeyFallbackEnabled: API_KEY_FALLBACK_ENABLED
 });
 
 registerConnectorRoutes({

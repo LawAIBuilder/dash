@@ -299,6 +299,7 @@ export interface PackageRunRow {
   approval_status: string | null;
   approved_at: string | null;
   approved_by: string | null;
+  approved_by_user_id: string | null;
   approval_note: string | null;
   input_json: string | null;
   output_json: string | null;
@@ -417,7 +418,7 @@ export function updatePackageRunDraft(db: Database.Database, runId: string, edit
 
 export function approvePackageRun(
   db: Database.Database,
-  input: { runId: string; approvedBy?: string | null; note?: string | null }
+  input: { runId: string; approvedBy?: string | null; approvedByUserId?: string | null; note?: string | null }
 ): PackageRunRow | null {
   const run = getPackageRun(db, input.runId);
   if (!run || run.status !== "completed" || !run.output_json) {
@@ -429,10 +430,11 @@ export function approvePackageRun(
       SET approval_status = 'approved',
           approved_at = CURRENT_TIMESTAMP,
           approved_by = ?,
+          approved_by_user_id = ?,
           approval_note = ?
       WHERE id = ?
     `
-  ).run(input.approvedBy ?? null, input.note?.trim() || null, input.runId);
+  ).run(input.approvedBy ?? null, input.approvedByUserId ?? null, input.note?.trim() || null, input.runId);
   return getPackageRun(db, input.runId);
 }
 

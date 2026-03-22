@@ -88,6 +88,7 @@ async function apiFetch(input: string | URL, init: ApiRequestInit = {}): Promise
   const combined = combineAbortSignals(signal, timeoutMs);
   try {
     return await fetch(input, {
+      credentials: "include",
       ...requestInit,
       signal: combined.signal
     });
@@ -155,6 +156,22 @@ async function readJson<T>(response: Response): Promise<T> {
 
 function apiUrl(path: string) {
   return `${API_BASE}${path}`;
+}
+
+export interface AuthSessionUser {
+  id: string;
+  email: string;
+  display_name: string;
+  role: "operator" | "reviewer" | "approver" | "admin";
+}
+
+export interface AuthSessionState {
+  authenticated: boolean;
+  user: AuthSessionUser | null;
+  session_enabled: boolean;
+  api_key_fallback_enabled: boolean;
+  bootstrap_admin_configured: boolean;
+  bootstrap_admin_pending: boolean;
 }
 
 export function isRetryableApiError(error: unknown): boolean {
@@ -234,6 +251,40 @@ export function getDisplayErrorMessage(error: unknown, fallback: string): string
     return error;
   }
   return fallback;
+}
+
+export async function getAuthSession(requestOptions?: ApiRequestOptions) {
+  const response = await apiFetch(apiUrl("/api/auth/session"), {
+    headers: buildApiHeaders(),
+    ...requestOptions
+  });
+  const payload = await readJson<{ ok: true } & AuthSessionState>(response);
+  return {
+    authenticated: payload.authenticated,
+    user: payload.user,
+    session_enabled: payload.session_enabled,
+    api_key_fallback_enabled: payload.api_key_fallback_enabled,
+    bootstrap_admin_configured: payload.bootstrap_admin_configured,
+    bootstrap_admin_pending: payload.bootstrap_admin_pending
+  } satisfies AuthSessionState;
+}
+
+export async function loginWithPassword(email: string, password: string) {
+  const response = await apiFetch(apiUrl("/api/auth/login"), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ email, password })
+  });
+  const payload = await readJson<{ ok: true; user: AuthSessionUser; session_expires_at: string }>(response);
+  return payload;
+}
+
+export async function logoutSession() {
+  const response = await apiFetch(apiUrl("/api/auth/logout"), {
+    method: "POST",
+    headers: buildApiHeaders()
+  });
+  return readJson<{ ok: true }>(response);
 }
 
 export async function listCases(requestOptions?: ApiRequestOptions): Promise<CaseListItem[]> {
@@ -1054,6 +1105,7 @@ export interface PackageRun {
   approval_status: string | null;
   approved_at: string | null;
   approved_by: string | null;
+  approved_by_user_id: string | null;
   approval_note: string | null;
   input_json: string | null;
   output_json: string | null;

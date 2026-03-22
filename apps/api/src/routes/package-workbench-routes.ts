@@ -32,6 +32,7 @@ import {
   getPageChunksInCase
 } from "../retrieval.js";
 import { resolvePackageExportDir } from "../storage-paths.js";
+import { readApprovedByFallbackHeader, requireAuthenticatedUser } from "../auth.js";
 import type { CaseRouteReply, HeaderRouteReply } from "./types.js";
 
 export interface RegisterPackageWorkbenchRoutesInput {
@@ -477,11 +478,36 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
     const body = request.body as { note?: string } | undefined;
     if (!assertCaseExists(caseId, reply)) return;
     if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
-    const approvedByHeader = request.headers["x-wc-actor"];
-    const approvedBy = typeof approvedByHeader === "string" && approvedByHeader.trim() ? approvedByHeader.trim() : null;
+
+    let approvedBy: string | null = null;
+    let approvedByUserId: string | null = null;
+
+    if (request.user) {
+      const user = requireAuthenticatedUser(request, reply, {
+        roles: ["reviewer", "approver", "admin"]
+      });
+      if (!user) return;
+      approvedBy = user.email;
+      approvedByUserId = user.id;
+    } else if (request.authMode === "api_key") {
+      approvedBy = readApprovedByFallbackHeader(request);
+      if (!approvedBy) {
+        return reply.code(400).send({
+          ok: false,
+          error: "x-wc-actor is required when approving via API key fallback"
+        });
+      }
+    } else {
+      return reply.code(401).send({
+        ok: false,
+        error: "Login required"
+      });
+    }
+
     const updated = approvePackageRun(db, {
       runId,
       approvedBy,
+      approvedByUserId,
       note: body?.note ?? null
     });
     if (!updated) {

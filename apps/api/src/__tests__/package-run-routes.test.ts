@@ -8,19 +8,37 @@ import type { FastifyInstance } from "fastify";
 describe("package run routes", () => {
   const tmpDir = mkdtempSync(join(tmpdir(), "wc-legal-prep-package-run-test-"));
   const dbPath = join(tmpDir, "authoritative.sqlite");
+  const apiKey = "operator-secret";
 
   let app: FastifyInstance;
   let db: Database.Database;
+  let sessionCookie: string;
 
   beforeAll(async () => {
     vi.resetModules();
     process.env.WC_SKIP_LISTEN = "1";
     process.env.WC_SQLITE_PATH = dbPath;
     process.env.WC_EXPORT_DIR = join(tmpDir, "package_exports");
+    process.env.WC_API_KEY = apiKey;
+    process.env.WC_SESSION_SECRET = "test-session-secret";
+    process.env.WC_BOOTSTRAP_ADMIN_EMAIL = "reviewer@example.com";
+    process.env.WC_BOOTSTRAP_ADMIN_PASSWORD = "review-password-123";
+    process.env.WC_BOOTSTRAP_ADMIN_NAME = "Review Admin";
     mkdirSync(process.env.WC_EXPORT_DIR, { recursive: true });
     const mod = await import("../server.js");
     app = mod.app;
     db = new Database(dbPath);
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: {
+        email: "reviewer@example.com",
+        password: "review-password-123"
+      }
+    });
+    expect(login.statusCode).toBe(200);
+    sessionCookie = (login.headers["set-cookie"] as string).split(";")[0];
   });
 
   afterAll(async () => {
@@ -30,12 +48,32 @@ describe("package run routes", () => {
     delete process.env.WC_SKIP_LISTEN;
     delete process.env.WC_SQLITE_PATH;
     delete process.env.WC_EXPORT_DIR;
+    delete process.env.WC_API_KEY;
+    delete process.env.WC_SESSION_SECRET;
+    delete process.env.WC_BOOTSTRAP_ADMIN_EMAIL;
+    delete process.env.WC_BOOTSTRAP_ADMIN_PASSWORD;
+    delete process.env.WC_BOOTSTRAP_ADMIN_NAME;
   });
+
+  function sessionHeaders(headers?: Record<string, string>) {
+    return {
+      cookie: sessionCookie,
+      ...(headers ?? {})
+    };
+  }
+
+  function apiKeyHeaders(headers?: Record<string, string>) {
+    return {
+      authorization: `Bearer ${apiKey}`,
+      ...(headers ?? {})
+    };
+  }
 
   async function createCase(name: string) {
     const res = await app.inject({
       method: "POST",
       url: "/api/cases",
+      headers: sessionHeaders(),
       payload: { name }
     });
     expect(res.statusCode).toBe(200);
@@ -48,6 +86,7 @@ describe("package run routes", () => {
     const packetRes = await app.inject({
       method: "POST",
       url: `/api/cases/${caseId}/exhibit-packets`,
+      headers: sessionHeaders(),
       payload: { packet_name: "Discovery Packet", package_type: "discovery_response" }
     });
     expect(packetRes.statusCode).toBe(200);
@@ -72,31 +111,37 @@ describe("package run routes", () => {
 
     const exportBefore = await app.inject({
       method: "POST",
-      url: `/api/cases/${caseId}/package-runs/run-approval-1/export-docx`
+      url: `/api/cases/${caseId}/package-runs/run-approval-1/export-docx`,
+      headers: sessionHeaders()
     });
     expect(exportBefore.statusCode).toBe(409);
 
     const approve = await app.inject({
       method: "POST",
       url: `/api/cases/${caseId}/package-runs/run-approval-1/approve`,
-      headers: { "x-wc-actor": "attorney@example.com" },
+      headers: sessionHeaders(),
       payload: { note: "Reviewed" }
     });
     expect(approve.statusCode).toBe(200);
-    const approved = approve.json<{ run: { approval_status: string; approved_by: string | null } }>().run;
+    const approved = approve.json<{
+      run: { approval_status: string; approved_by: string | null; approved_by_user_id: string | null };
+    }>().run;
     expect(approved.approval_status).toBe("approved");
-    expect(approved.approved_by).toBe("attorney@example.com");
+    expect(approved.approved_by).toBe("reviewer@example.com");
+    expect(approved.approved_by_user_id).toBeTruthy();
 
     const patchAfterApproval = await app.inject({
       method: "PATCH",
       url: `/api/cases/${caseId}/package-runs/run-approval-1`,
+      headers: sessionHeaders(),
       payload: { markdown: "# Edited After Approval" }
     });
     expect(patchAfterApproval.statusCode).toBe(400);
 
     const exportAfter = await app.inject({
       method: "POST",
-      url: `/api/cases/${caseId}/package-runs/run-approval-1/export-docx`
+      url: `/api/cases/${caseId}/package-runs/run-approval-1/export-docx`,
+      headers: sessionHeaders()
     });
     expect(exportAfter.statusCode).toBe(200);
 
@@ -123,12 +168,67 @@ describe("package run routes", () => {
     expect(exported?.latest_exported_at).toBeTruthy();
   });
 
+  it("keeps API-key approval as transitional fallback and requires x-wc-actor there", async () => {
+    const caseId = await createCase("Fallback Approval Matter");
+
+    const packetRes = await app.inject({
+      method: "POST",
+      url: `/api/cases/${caseId}/exhibit-packets`,
+      headers: sessionHeaders(),
+      payload: { packet_name: "Fallback Packet", package_type: "hearing_packet" }
+    });
+    expect(packetRes.statusCode).toBe(200);
+    const packetId = packetRes.json<{ packet: { id: string } }>().packet.id;
+
+    db.prepare(
+      `
+        INSERT INTO package_runs
+          (id, packet_id, status, output_json, model, completed_at, approval_status)
+        VALUES
+          (?, ?, 'completed', ?, 'gpt-4o', CURRENT_TIMESTAMP, 'pending')
+      `
+    ).run(
+      "run-fallback-1",
+      packetId,
+      JSON.stringify({
+        draft_markdown: "# Fallback",
+        citations: [],
+        qa_checklist: []
+      })
+    );
+
+    const missingActor = await app.inject({
+      method: "POST",
+      url: `/api/cases/${caseId}/package-runs/run-fallback-1/approve`,
+      headers: apiKeyHeaders()
+    });
+    expect(missingActor.statusCode).toBe(400);
+
+    const fallbackApprove = await app.inject({
+      method: "POST",
+      url: `/api/cases/${caseId}/package-runs/run-fallback-1/approve`,
+      headers: apiKeyHeaders({
+        "x-wc-actor": "legacy-operator@example.com"
+      })
+    });
+    expect(fallbackApprove.statusCode).toBe(200);
+    expect(
+      fallbackApprove.json<{ run: { approved_by: string | null; approved_by_user_id: string | null } }>().run
+    ).toEqual(
+      expect.objectContaining({
+        approved_by: "legacy-operator@example.com",
+        approved_by_user_id: null
+      })
+    );
+  });
+
   it("returns historical flow and recommendation routes", async () => {
     const caseId = await createCase("Historical Flow Matter");
 
     const hydrate = await app.inject({
       method: "POST",
       url: "/api/connectors/box/development/hydrate",
+      headers: sessionHeaders(),
       payload: {
         case_id: caseId,
         files: [
@@ -141,7 +241,8 @@ describe("package run routes", () => {
 
     const flowRes = await app.inject({
       method: "GET",
-      url: `/api/cases/${caseId}/historical-flow`
+      url: `/api/cases/${caseId}/historical-flow`,
+      headers: sessionHeaders()
     });
     expect(flowRes.statusCode).toBe(200);
     const flow = flowRes.json<{ events: Array<{ event_type: string }> }>().events;
@@ -149,7 +250,8 @@ describe("package run routes", () => {
 
     const recommendationsRes = await app.inject({
       method: "GET",
-      url: `/api/cases/${caseId}/historical-recommendations`
+      url: `/api/cases/${caseId}/historical-recommendations`,
+      headers: sessionHeaders()
     });
     expect(recommendationsRes.statusCode).toBe(200);
     const recommendations = recommendationsRes.json<{
@@ -160,7 +262,8 @@ describe("package run routes", () => {
 
     const summaryRes = await app.inject({
       method: "GET",
-      url: "/api/intelligence/historical-flow-summary"
+      url: "/api/intelligence/historical-flow-summary",
+      headers: sessionHeaders()
     });
     expect(summaryRes.statusCode).toBe(200);
     const summary = summaryRes.json<{ summary: { case_count: number } }>().summary;
@@ -174,6 +277,7 @@ describe("package run routes", () => {
     const packetRes = await app.inject({
       method: "POST",
       url: `/api/cases/${caseId}/exhibit-packets`,
+      headers: sessionHeaders(),
       payload: { packet_name: "Scoped Packet", package_type: "hearing_packet" }
     });
     expect(packetRes.statusCode).toBe(200);
@@ -181,7 +285,8 @@ describe("package run routes", () => {
 
     const createRunRes = await app.inject({
       method: "POST",
-      url: `/api/cases/${otherCaseId}/exhibit-packets/${packetId}/package-runs`
+      url: `/api/cases/${otherCaseId}/exhibit-packets/${packetId}/package-runs`,
+      headers: sessionHeaders()
     });
     expect(createRunRes.statusCode).toBe(404);
 
@@ -209,19 +314,22 @@ describe("package run routes", () => {
 
     const listRes = await app.inject({
       method: "GET",
-      url: `/api/cases/${otherCaseId}/exhibit-packets/${packetId}/package-runs`
+      url: `/api/cases/${otherCaseId}/exhibit-packets/${packetId}/package-runs`,
+      headers: sessionHeaders()
     });
     expect(listRes.statusCode).toBe(404);
 
     const runRes = await app.inject({
       method: "GET",
-      url: `/api/cases/${otherCaseId}/package-runs/run-scope-1`
+      url: `/api/cases/${otherCaseId}/package-runs/run-scope-1`,
+      headers: sessionHeaders()
     });
     expect(runRes.statusCode).toBe(404);
 
     const patchRes = await app.inject({
       method: "PATCH",
       url: `/api/cases/${otherCaseId}/package-runs/run-scope-1`,
+      headers: sessionHeaders(),
       payload: { markdown: "# Wrong Case Edit" }
     });
     expect(patchRes.statusCode).toBe(404);
@@ -229,13 +337,14 @@ describe("package run routes", () => {
     const approveRes = await app.inject({
       method: "POST",
       url: `/api/cases/${otherCaseId}/package-runs/run-scope-1/approve`,
-      headers: { "x-wc-actor": "attorney@example.com" }
+      headers: sessionHeaders()
     });
     expect(approveRes.statusCode).toBe(404);
 
     const exportRes = await app.inject({
       method: "POST",
-      url: `/api/cases/${otherCaseId}/package-runs/run-scope-1/export-docx`
+      url: `/api/cases/${otherCaseId}/package-runs/run-scope-1/export-docx`,
+      headers: sessionHeaders()
     });
     expect(exportRes.statusCode).toBe(404);
   });
@@ -247,6 +356,7 @@ describe("package run routes", () => {
     const packetRes = await app.inject({
       method: "POST",
       url: `/api/cases/${caseId}/exhibit-packets`,
+      headers: sessionHeaders(),
       payload: { packet_name: "Scoped Packet", package_type: "hearing_packet" }
     });
     expect(packetRes.statusCode).toBe(200);
@@ -255,6 +365,7 @@ describe("package run routes", () => {
     const hydrateOther = await app.inject({
       method: "POST",
       url: "/api/connectors/box/development/hydrate",
+      headers: sessionHeaders(),
       payload: {
         case_id: otherCaseId,
         files: [{ remote_id: "other-run-source-1", filename: "other-case-source.pdf" }]
@@ -270,6 +381,7 @@ describe("package run routes", () => {
     const createRunRes = await app.inject({
       method: "POST",
       url: `/api/cases/${caseId}/exhibit-packets/${packetId}/package-runs`,
+      headers: sessionHeaders(),
       payload: { whole_file_source_item_ids: [otherSourceItem!.id] }
     });
     expect(createRunRes.statusCode).toBe(404);

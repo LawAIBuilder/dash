@@ -9,9 +9,10 @@ import {
 } from "@/localState";
 import type { ProjectionCacheEntry } from "@/types/cases";
 
-export function useProjection(caseId: string | null | undefined) {
+export function useProjection(caseId: string | null | undefined, options?: { enabled?: boolean }) {
   const [desktopState, setDesktopState] = useState<DesktopProjectionState>(() => loadDesktopProjectionState());
   const normalizedCaseId = caseId?.trim() || "";
+  const queryEnabled = options?.enabled ?? true;
 
   const cachedMatter = useMemo(() => {
     if (!normalizedCaseId) {
@@ -22,7 +23,7 @@ export function useProjection(caseId: string | null | undefined) {
 
   const query = useQuery<MatterProjection>({
     queryKey: ["projection", normalizedCaseId],
-    enabled: normalizedCaseId.length > 0,
+    enabled: queryEnabled && normalizedCaseId.length > 0,
     queryFn: ({ signal }) => getProjection(normalizedCaseId, { signal }),
     initialData: cachedMatter?.projection
   });

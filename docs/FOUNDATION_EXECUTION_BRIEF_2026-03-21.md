@@ -123,17 +123,19 @@ Startup logging now includes the effective SQLite path, export path, and whether
 
 ### Current truth (implemented)
 
-- **Browser → API:** Shared bearer from `VITE_WC_API_KEY` in [`apps/desktop/src/config.ts`](../apps/desktop/src/config.ts), sent as `Authorization: Bearer …` via [`api-client.ts`](../apps/desktop/src/lib/api-client.ts).
-- **API trust:** Server validates `WC_API_KEY` ([`server.ts`](../apps/api/src/server.ts)); this is a **single shared secret**, not per-user identity.
-- **Approval attribution:** Package run approve reads optional header **`x-wc-actor`** and passes string to `approvePackageRun` ([`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts) lines 485–490). The desktop client does not establish a verified principal for this path today.
+- **Browser session auth exists now:** the API exposes **`/api/auth/login`**, **`/api/auth/session`**, and **`/api/auth/logout`**, backed by **`users`**, **`auth_sessions`**, and **`case_memberships`** ([`auth.ts`](../apps/api/src/auth.ts), [`auth-routes.ts`](../apps/api/src/routes/auth-routes.ts), [`schema.ts`](../apps/api/src/schema.ts)).
+- **Request principal exists now:** Fastify requests now resolve **`request.user`** from the HTTP-only session cookie when **`WC_SESSION_SECRET`** is configured ([`auth.ts`](../apps/api/src/auth.ts), [`server.ts`](../apps/api/src/server.ts)).
+- **Bootstrap login path exists now:** a first admin can be provisioned from **`WC_BOOTSTRAP_ADMIN_EMAIL`** and **`WC_BOOTSTRAP_ADMIN_PASSWORD`** on startup ([`auth.ts`](../apps/api/src/auth.ts), [`server.ts`](../apps/api/src/server.ts), [`.env.example`](../.env.example)).
+- **Fallback shared bearer still exists:** `VITE_WC_API_KEY` / `WC_API_KEY` remain as transitional fallback and break-glass auth ([`apps/desktop/src/config.ts`](../apps/desktop/src/config.ts), [`server.ts`](../apps/api/src/server.ts)).
+- **Approval attribution is partially real now:** package approval now prefers the authenticated principal, stores **`approved_by_user_id`**, and only accepts **`x-wc-actor`** when the request is using API-key fallback ([`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`ai-service.ts`](../apps/api/src/ai-service.ts), [`schema.ts`](../apps/api/src/schema.ts)).
 
-### Target architecture (planned)
+### Target architecture (remaining after the first slice)
 
 **Default hosted browser authentication:** **HTTP-only session cookie** issued by the API after login (same site / CSRF-safe patterns). **JWT** may exist later for alternate clients; it is **not** the default browser contract in this brief.
 
-Introduce **`request.user`** (or equivalent Fastify-typed principal) on authenticated requests.
+The repo now has the first real principal slice. The remaining auth work is to extend that principal model from login + package approval to broader route guards and actor stamping.
 
-### Schema and data model (planned)
+### Schema and data model (implemented foundation, broader use still planned)
 
 | Construct | Purpose |
 | --- | --- |
@@ -142,14 +144,14 @@ Introduce **`request.user`** (or equivalent Fastify-typed principal) on authenti
 | `case_memberships` (or equivalent) | Case-scoped read/write/run/approve |
 | Actor columns | `created_by`, `updated_by`, `approved_by`, optional `acted_as_role` on state-changing records |
 
-**Rule:** Approvals are **not** considered meaningful for governance until tied to **authenticated** user ids, not unverified headers.
+**Current status:** `approved_by_user_id` on `package_runs` is implemented; broader actor stamping remains open.
 
 ### Migration sequence (locked)
 
 | Phase | Content |
 | --- | --- |
-| **A** | Principal middleware; session login; keep **`WC_API_KEY`** / browser bearer only as **break-glass** or dev fallback. Stop preferring `x-wc-actor` when `request.user` exists. |
-| **B** | Actor stamping on all state-changing writes (approvals, package rules, uploads, connector actions, templates, exports). |
+| **A** | Principal middleware; session login; keep **`WC_API_KEY`** / browser bearer only as **break-glass** or dev fallback. Stop preferring `x-wc-actor` when `request.user` exists. **Implemented for the first vertical slice.** |
+| **B** | Actor stamping on all state-changing writes (approvals, package rules, uploads, connector actions, templates, exports). **Partially implemented**: package run approvals now stamp authenticated principals. |
 | **C** | Route guards: case read/write, package run/approve, connector manage, ops/admin. |
 | **D** | Remove **`VITE_WC_API_KEY`** from normal hosted usage; retain server **`WC_API_KEY`** only for M2M or break-glass if absolutely required. |
 

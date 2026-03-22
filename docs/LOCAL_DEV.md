@@ -42,6 +42,9 @@ PORT=4000
 Optional but common:
 
 - `WC_SQLITE_PATH`
+- `WC_SESSION_SECRET`
+- `WC_BOOTSTRAP_ADMIN_EMAIL`
+- `WC_BOOTSTRAP_ADMIN_PASSWORD`
 - `WC_API_KEY`
 - `BOX_JWT_CONFIG_JSON` or `BOX_JWT_CONFIG_FILE`
 - `BOX_USER_ID`
@@ -52,14 +55,24 @@ Optional but common:
 Create `apps/desktop/.env` with:
 
 ```bash
-VITE_API_BASE_URL=http://127.0.0.1:4000
+VITE_API_BASE_URL=http://localhost:4000
 ```
 
-If the API uses `WC_API_KEY`, also set:
+If you are intentionally using shared browser bearer fallback, also set:
 
 ```bash
 VITE_WC_API_KEY=your-local-api-key
 ```
+
+If you are using browser session auth locally:
+
+- Do **not** set `VITE_WC_API_KEY`.
+- Use the server bootstrap admin env (`WC_BOOTSTRAP_ADMIN_EMAIL`, `WC_BOOTSTRAP_ADMIN_PASSWORD`) and sign in through the browser.
+- Keep the hostnames aligned. A common local pairing is:
+  - desktop on `http://localhost:5173`
+  - API on `http://localhost:4000`
+
+Avoid mixing `localhost` and `127.0.0.1` when testing session cookies; the browser will treat those as different sites for cookie purposes.
 
 ## Start The App
 
@@ -131,8 +144,14 @@ Check:
 
 Check:
 
-- `WC_API_KEY` on the API
-- `VITE_WC_API_KEY` in the desktop env
+- If using sessions:
+  - `WC_SESSION_SECRET`
+  - `WC_BOOTSTRAP_ADMIN_EMAIL`
+  - `WC_BOOTSTRAP_ADMIN_PASSWORD`
+  - matching hostnames between `VITE_API_BASE_URL` and the browser origin
+- If using shared bearer fallback:
+  - `WC_API_KEY` on the API
+  - `VITE_WC_API_KEY` in the desktop env
 
 ### Remote API in a container
 

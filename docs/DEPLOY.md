@@ -1,6 +1,6 @@
 # Deploying the authoritative API + OCR worker
 
-The stack is **Node + SQLite (WAL)**. The HTTP API and the OCR worker are **separate processes** that must share the **same database file** and **compatible environment** (Box JWT, optional API key).
+The stack is **Node + SQLite (WAL)**. The HTTP API and the OCR worker are **separate processes** that must share the **same database file** and **compatible environment** (Box JWT, browser-session auth or fallback API key, and the same writable artifact paths).
 
 ## Primary product mode (hosted internal web)
 
@@ -37,11 +37,12 @@ Without the worker, **Queue OCR** only enqueues rows; text is not produced until
 - Set **`WC_CORS_ORIGIN`** to a comma-separated list of allowed origins (e.g. your hosted desktop shell `https://app.example.com`).
 - If unset, local Vite origins are allowed (see `server.ts`).
 
-## API key (optional)
+## Browser auth and fallback API key
 
-- Set **`WC_API_KEY`** on the API; clients must send `Authorization: Bearer <same value>`.
-- Desktop / browser: **`VITE_WC_API_KEY`** must match (see [DOGFOOD.md](./DOGFOOD.md)).
-- This shared-key browser model is **transitional hosted auth**, not the final security model for the product. See [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md).
+- **Preferred hosted browser auth:** set **`WC_SESSION_SECRET`** and bootstrap at least one admin with **`WC_BOOTSTRAP_ADMIN_EMAIL`** and **`WC_BOOTSTRAP_ADMIN_PASSWORD`**. The API then issues an HTTP-only session cookie through **`POST /api/auth/login`**.
+- **Shared bearer fallback:** **`WC_API_KEY`** remains available for break-glass, machine-to-machine, and transitional internal use. It is no longer the preferred normal browser path.
+- **Browser bundle fallback:** only set **`VITE_WC_API_KEY`** if you are intentionally still using shared browser bearer mode. It is **not** required when hosted browser login is enabled.
+- This repo now supports both modes, but the shared-key browser model is still **transitional hosted auth**, not the final security model. See [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md).
 
 ## Box (OCR worker + sync)
 
@@ -131,7 +132,13 @@ Set these in the host **secret store** / env UI (never commit real values):
 | `WC_SQLITE_PATH` | Yes (hosted) | Absolute path on persistent volume. |
 | `WC_CORS_ORIGIN` | Yes | Comma-separated **exact** origins of the static app, e.g. `https://app.yourdomain.com`. |
 | `WC_TRUST_PROXY` | If behind proxy/LB | `true` so client IP and rate limits are correct. |
-| `WC_API_KEY` | Strongly recommended | Shared bearer for browser until real auth; rotate if leaked. |
+| `WC_SESSION_SECRET` | Strongly recommended for hosted browser use | Enables HTTP-only browser sessions; required for `/api/auth/login`. |
+| `WC_SESSION_TTL_HOURS` | Optional | Session lifetime; defaults to `12`. |
+| `WC_BOOTSTRAP_ADMIN_EMAIL` | Strongly recommended for first hosted login | Seeds the first admin account at startup if missing. |
+| `WC_BOOTSTRAP_ADMIN_PASSWORD` | Strongly recommended for first hosted login | Pairs with bootstrap admin email; store in secret manager only. |
+| `WC_BOOTSTRAP_ADMIN_NAME` | Optional | Friendly name for the bootstrap admin account. |
+| `WC_BOOTSTRAP_ADMIN_RESEED` | Optional | Set to `1` only when intentionally rotating the bootstrap admin password from env on startup. |
+| `WC_API_KEY` | Optional fallback | Shared bearer for break-glass / M2M / transitional internal use; rotate if leaked. |
 | `WC_ENABLE_DEV_ROUTES` | No | Omit or `0` in production. |
 | `OPENAI_API_KEY` | If AI features used | Server-side only. |
 | Box JWT vars | If Box sync/OCR | See [.env.example](../.env.example). |
@@ -147,7 +154,7 @@ Set these in the host **secret store** / env UI (never commit real values):
 | Variable | Notes |
 |----------|--------|
 | `VITE_API_BASE_URL` | HTTPS origin of the API, e.g. `https://api.yourdomain.com`. |
-| `VITE_WC_API_KEY` | Must match `WC_API_KEY` if using shared bearer. **Not a secret** in the browser bundle—acceptable only for **trusted internal** use. |
+| `VITE_WC_API_KEY` | Only if intentionally using shared bearer fallback. **Not a secret** in the browser bundle—acceptable only for **trusted internal** use. |
 
 Rebuild and redeploy the static app whenever the API URL or key strategy changes.
 
@@ -162,8 +169,10 @@ Rebuild and redeploy the static app whenever the API URL or key strategy changes
 - `GET https://<api-origin>/health` → 200 (no auth; safe for load balancers).
 - `GET https://<api-origin>/api/workers/ocr/health` → worker summary is present and `stale` is understandable for the current worker state. Send `Authorization: Bearer <WC_API_KEY>` if `WC_API_KEY` is configured.
 - `GET https://<api-origin>/api/ops/readiness` → confirms actual db path, export path, writable-path state, migration id, Box/OpenAI presence booleans, and OCR stale summary. Send `Authorization: Bearer <WC_API_KEY>` if `WC_API_KEY` is configured.
+- `GET https://<api-origin>/api/auth/session` → confirms whether browser session auth is enabled and whether a principal is currently authenticated.
 - Open `https://<app-origin>/` in a browser; confirm no mixed-content (HTTPS → HTTP API is blocked by browsers—API must be HTTPS too).
-- Exercise one authenticated read (e.g. case list) if `WC_API_KEY` is set.
+- If browser session auth is enabled, complete one real browser login and verify the workspace loads without `VITE_WC_API_KEY`.
+- If `WC_API_KEY` is still in use, exercise one authenticated read (e.g. case list) with the bearer too.
 
 ### 5a. Required writable paths
 
@@ -226,6 +235,13 @@ Run this on a non-production clone before calling the environment production-rea
 6. Spot-check one matter with uploads and one matter with exports to confirm files open correctly.
 
 Record the snapshot ID or manual backup location used for the drill.
+
+Latest recorded local non-prod drill:
+
+- **Executed:** `2026-03-22T04:55Z` (local operator run on 2026-03-21 America/Chicago)
+- **Snapshot ID:** `2026-03-22-04-55-55-restore-drill-b85f5c1c`
+- **Validated after restore:** `GET /health`, `GET /api/ops/readiness`, and `GET /api/cases` against the restored clone all succeeded.
+- **Scope note:** This proves the repo’s restore mechanics on a local non-production clone. A platform-specific staged restore remains recommended before calling hosted production fully hardened.
 
 ### 7. Operator runbooks
 

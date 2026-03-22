@@ -37,7 +37,7 @@ function assertRuntimeCompatibility(db: Database.Database) {
     canonical_pages: ["ocr_status", "extraction_status", "updated_at"],
     sync_runs: ["warning_message"],
     ai_jobs: ["error_code"],
-    package_runs: ["error_code"],
+    package_runs: ["error_code", "approved_by_user_id"],
     usage_counters: ["counter_key", "usage_date", "units"]
   };
 
