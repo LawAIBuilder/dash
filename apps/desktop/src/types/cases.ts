@@ -1,5 +1,7 @@
 import type { MatterProjection, ProjectionWatermark } from "@wc/domain-core";
 
+export type CaseMembershipRole = "operator" | "reviewer" | "approver" | "admin";
+
 export interface CaseListItem {
   id: string;
   name: string;
@@ -148,4 +150,21 @@ export interface CaseActivityEvent {
   occurred_at: string;
   payload_json: string;
   created_at?: string | null;
+}
+
+export interface CaseMembershipUser {
+  id: string;
+  email: string;
+  display_name: string;
+  role: CaseMembershipRole;
+  active: boolean;
+}
+
+export interface CaseMembershipItem {
+  case_id: string;
+  user_id: string;
+  role: CaseMembershipRole;
+  created_at?: string | null;
+  updated_at?: string | null;
+  user: CaseMembershipUser;
 }

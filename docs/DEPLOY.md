@@ -41,7 +41,7 @@ Without the worker, **Queue OCR** only enqueues rows; text is not produced until
 
 - **Preferred hosted browser auth:** set **`WC_SESSION_SECRET`** and bootstrap at least one admin with **`WC_BOOTSTRAP_ADMIN_EMAIL`** and **`WC_BOOTSTRAP_ADMIN_PASSWORD`**. The API then issues an HTTP-only session cookie through **`POST /api/auth/login`**.
 - **Current Wave 2 authorization slice:** in the package/workbench routes, non-admin session users now need a **`case_memberships`** row for case access; cases created through session auth automatically seed membership for the creator.
-- **Current limitation:** there is not yet a membership-management UI or admin route for older cases. New cases created through the session path seed membership automatically; broader membership administration remains later Wave 2 work.
+- **Current recovery path for older cases:** admins can now manage case memberships and run a per-case backfill for active users from the matter overview or the case-membership API routes. That fixes legacy cases that predate membership seeding without raw SQL.
 - **Shared bearer fallback:** **`WC_API_KEY`** remains available for break-glass, machine-to-machine, and transitional internal use. It is no longer the preferred normal browser path.
 - **Browser bundle fallback:** only set **`VITE_WC_API_KEY`** if you are intentionally still using shared browser bearer mode. It is **not** required when hosted browser login is enabled.
 - This repo now supports both modes, but the shared-key browser model is still **transitional hosted auth**, not the final security model. See [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md).
@@ -288,7 +288,7 @@ Hosted internal web is the **default** operating mode when:
 ### 9. What this checklist explicitly does not do
 
 - Multi-tenant public SaaS hardening (see [HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md) Phase 2).
-- PostgreSQL migration or full authorization completion across every route family. The current internal auth slice covers browser sessions, package approvals, and package/workbench case membership; broader case-scoped authorization remains ongoing.
+- PostgreSQL migration or full authorization completion across every route family. The current internal auth slice covers browser sessions, package approvals, and case-membership administration/backfill for the package/workbench surface; broader case-scoped authorization remains ongoing.
 
 ---
 

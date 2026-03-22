@@ -2,6 +2,8 @@ import type { MatterProjection, ProjectionWatermark } from "@wc/domain-core";
 import { API_BASE, buildApiHeaders } from "@/config";
 import type {
   CaseActivityEvent,
+  CaseMembershipItem,
+  CaseMembershipRole,
   CasePersonItem,
   CaseListItem,
   CaseTimelineItem,
@@ -287,6 +289,15 @@ export async function logoutSession() {
   return readJson<{ ok: true }>(response);
 }
 
+export async function listAuthUsers(requestOptions?: ApiRequestOptions) {
+  const response = await apiFetch(apiUrl("/api/auth/users"), {
+    headers: buildApiHeaders(),
+    ...requestOptions
+  });
+  const payload = await readJson<{ ok: true; users: AuthSessionUser[] }>(response);
+  return payload.users;
+}
+
 export async function listCases(requestOptions?: ApiRequestOptions): Promise<CaseListItem[]> {
   const response = await apiFetch(apiUrl("/api/cases"), {
     headers: buildApiHeaders(),
@@ -322,6 +333,48 @@ export async function getCase(caseId: string, requestOptions?: ApiRequestOptions
   });
   const payload = await readJson<{ ok: true; case: CaseListItem }>(response);
   return payload.case;
+}
+
+export async function listCaseMemberships(caseId: string, requestOptions?: ApiRequestOptions) {
+  const response = await apiFetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/memberships`), {
+    headers: buildApiHeaders(),
+    ...requestOptions
+  });
+  const payload = await readJson<{ ok: true; memberships: CaseMembershipItem[] }>(response);
+  return payload.memberships;
+}
+
+export async function setCaseMembership(caseId: string, userId: string, role: CaseMembershipRole) {
+  const response = await apiFetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/memberships/${encodeURIComponent(userId)}`),
+    {
+      method: "PUT",
+      headers: buildApiHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ role })
+    }
+  );
+  const payload = await readJson<{ ok: true; membership: CaseMembershipItem }>(response);
+  return payload.membership;
+}
+
+export async function removeCaseMembership(caseId: string, userId: string) {
+  const response = await apiFetch(
+    apiUrl(`/api/cases/${encodeURIComponent(caseId)}/memberships/${encodeURIComponent(userId)}`),
+    {
+      method: "DELETE",
+      headers: buildApiHeaders()
+    }
+  );
+  return readJson<{ ok: true }>(response);
+}
+
+export async function backfillCaseMemberships(caseId: string) {
+  const response = await apiFetch(apiUrl(`/api/cases/${encodeURIComponent(caseId)}/memberships/backfill`), {
+    method: "POST",
+    headers: buildApiHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({})
+  });
+  return readJson<{ ok: true; case_id: string; inserted_count: number; memberships: CaseMembershipItem[] }>(response);
 }
 
 export async function updateCase(caseId: string, input: Partial<CreateCaseInput>): Promise<CaseListItem> {

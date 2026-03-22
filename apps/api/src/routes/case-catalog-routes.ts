@@ -1,6 +1,14 @@
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
-import { ensureCaseMembership } from "../auth.js";
+import {
+  backfillCaseMembershipsForCase,
+  deleteCaseMembership,
+  ensureCaseMembership,
+  listCaseMemberships,
+  parseUserRole,
+  requireAuthenticatedUser,
+  setCaseMembershipRole
+} from "../auth.js";
 import type { EnsureCaseScaffoldInput } from "../runtime.js";
 import type { CaseRouteReply } from "./types.js";
 
@@ -173,6 +181,99 @@ export function registerCaseCatalogRoutes(input: RegisterCaseCatalogRoutesInput)
       return;
     }
     return { ok: true, case: readCaseRow(db, caseId) ?? null };
+  });
+
+  app.get("/api/cases/:caseId/memberships", async (request, reply) => {
+    const admin = requireAuthenticatedUser(request, reply, { roles: ["admin"] });
+    if (!admin) {
+      return;
+    }
+    const { caseId } = request.params as { caseId: string };
+    if (!assertCaseExists(caseId, reply)) {
+      return;
+    }
+    return {
+      ok: true,
+      case_id: caseId,
+      memberships: listCaseMemberships(db, caseId)
+    };
+  });
+
+  app.put("/api/cases/:caseId/memberships/:userId", async (request, reply) => {
+    const admin = requireAuthenticatedUser(request, reply, { roles: ["admin"] });
+    if (!admin) {
+      return;
+    }
+    const { caseId, userId } = request.params as { caseId: string; userId: string };
+    if (!assertCaseExists(caseId, reply)) {
+      return;
+    }
+    const body = request.body as { role?: string } | undefined;
+    const role = parseUserRole(body?.role?.trim());
+    if (!role) {
+      return reply.code(400).send({
+        ok: false,
+        error: "role must be one of operator, reviewer, approver, or admin"
+      });
+    }
+
+    const membership = setCaseMembershipRole(db, {
+      caseId,
+      userId,
+      role
+    });
+    if (!membership) {
+      return reply.code(404).send({
+        ok: false,
+        error: "active user not found"
+      });
+    }
+    return {
+      ok: true,
+      membership
+    };
+  });
+
+  app.delete("/api/cases/:caseId/memberships/:userId", async (request, reply) => {
+    const admin = requireAuthenticatedUser(request, reply, { roles: ["admin"] });
+    if (!admin) {
+      return;
+    }
+    const { caseId, userId } = request.params as { caseId: string; userId: string };
+    if (!assertCaseExists(caseId, reply)) {
+      return;
+    }
+    const removed = deleteCaseMembership(db, {
+      caseId,
+      userId
+    });
+    if (!removed) {
+      return reply.code(404).send({
+        ok: false,
+        error: "membership not found"
+      });
+    }
+    return {
+      ok: true
+    };
+  });
+
+  app.post("/api/cases/:caseId/memberships/backfill", async (request, reply) => {
+    const admin = requireAuthenticatedUser(request, reply, { roles: ["admin"] });
+    if (!admin) {
+      return;
+    }
+    const { caseId } = request.params as { caseId: string };
+    if (!assertCaseExists(caseId, reply)) {
+      return;
+    }
+    const result = backfillCaseMembershipsForCase(db, caseId);
+    return {
+      ok: true,
+      case_id: caseId,
+      inserted_count: result.inserted_count,
+      memberships: result.memberships
+    };
   });
 
   app.patch("/api/cases/:caseId", async (request, reply) => {

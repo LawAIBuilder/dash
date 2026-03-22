@@ -1,17 +1,21 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { FileCheck2, FolderSync, ShieldAlert, Sparkles, Workflow } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useProjection } from "@/hooks/useProjection";
 import { useCaseActions } from "@/hooks/useCaseActions";
 import { useCaseActivity } from "@/hooks/useCaseActivity";
+import { useAuthSession } from "@/hooks/useAuth";
+import { useCaseMemberships } from "@/hooks/useCaseMemberships";
 import { getDisplayErrorMessage } from "@/lib/api-client";
 import { formatDateTime, formatLabel, summarizeCountRecord } from "@/ui/formatters";
 import { PageSkeleton } from "@/components/case/PageSkeleton";
 import { StatePanel } from "@/components/case/StatePanel";
+import type { CaseMembershipRole } from "@/types/cases";
 
 function MetricCard({
   icon: Icon,
@@ -34,6 +38,167 @@ function MetricCard({
           <div className="text-sm text-muted-foreground">{label}</div>
           <div className="mt-1 text-2xl font-semibold">{value}</div>
           <div className="mt-1 text-sm text-muted-foreground">{detail}</div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CaseAccessAdminCard({ caseId }: { caseId: string }) {
+  const authSession = useAuthSession();
+  const isAdmin = authSession.data?.authenticated && authSession.data.user?.role === "admin";
+  const { membershipsQuery, usersQuery, setMembershipMutation, removeMembershipMutation, backfillMembershipsMutation } =
+    useCaseMemberships(caseId, { enabled: Boolean(isAdmin) });
+  const [selectedUserId, setSelectedUserId] = useState("");
+  const [selectedRole, setSelectedRole] = useState<CaseMembershipRole>("operator");
+
+  if (!isAdmin) {
+    return null;
+  }
+
+  const memberships = membershipsQuery.data ?? [];
+  const users = usersQuery.data ?? [];
+  const selectedMembership = memberships.find((membership) => membership.user_id === selectedUserId) ?? null;
+
+  async function handleGrantOrUpdate() {
+    if (!selectedUserId) {
+      toast.error("Choose a user first.");
+      return;
+    }
+    try {
+      await setMembershipMutation.mutateAsync({
+        userId: selectedUserId,
+        role: selectedRole
+      });
+      toast.success(selectedMembership ? "Case access updated." : "Case access granted.");
+    } catch (error) {
+      toast.error(getDisplayErrorMessage(error, "Could not update case access."));
+    }
+  }
+
+  async function handleBackfill() {
+    try {
+      const result = await backfillMembershipsMutation.mutateAsync();
+      toast.success(
+        result.inserted_count > 0
+          ? `Backfilled ${result.inserted_count} active user${result.inserted_count === 1 ? "" : "s"} as operators.`
+          : "No missing memberships were found for active users."
+      );
+    } catch (error) {
+      toast.error(getDisplayErrorMessage(error, "Could not backfill case access."));
+    }
+  }
+
+  async function handleRemove(userId: string) {
+    try {
+      await removeMembershipMutation.mutateAsync(userId);
+      if (selectedUserId === userId) {
+        setSelectedUserId("");
+        setSelectedRole("operator");
+      }
+      toast.success("Case access removed.");
+    } catch (error) {
+      toast.error(getDisplayErrorMessage(error, "Could not remove case access."));
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Case access</CardTitle>
+        <CardDescription>
+          Admin-only membership management for older matters and targeted access assignment.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/30 p-3 text-sm">
+          <div>
+            <div className="font-medium">Legacy matter backfill</div>
+            <div className="text-muted-foreground">
+              Add every active user as an operator on this matter so older cases stop 403ing in the workbench.
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            disabled={backfillMembershipsMutation.isPending}
+            onClick={() => void handleBackfill()}
+          >
+            {backfillMembershipsMutation.isPending ? "Backfilling…" : "Backfill active users"}
+          </Button>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_12rem_auto]">
+          <Select
+            value={selectedUserId}
+            onValueChange={(value) => {
+              setSelectedUserId(value);
+              const existing = memberships.find((membership) => membership.user_id === value) ?? null;
+              setSelectedRole(existing?.role ?? "operator");
+            }}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Choose a user" />
+            </SelectTrigger>
+            <SelectContent>
+              {users.map((user) => (
+                <SelectItem key={user.id} value={user.id}>
+                  {user.display_name} ({user.email})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Select value={selectedRole} onValueChange={(value) => setSelectedRole(value as CaseMembershipRole)}>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="operator">Operator</SelectItem>
+              <SelectItem value="reviewer">Reviewer</SelectItem>
+              <SelectItem value="approver">Approver</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Button
+            disabled={!selectedUserId || setMembershipMutation.isPending}
+            onClick={() => void handleGrantOrUpdate()}
+          >
+            {setMembershipMutation.isPending ? "Saving…" : selectedMembership ? "Update access" : "Grant access"}
+          </Button>
+        </div>
+
+        <div className="space-y-2">
+          {membershipsQuery.isLoading ? (
+            <div className="text-sm text-muted-foreground">Loading case memberships…</div>
+          ) : memberships.length > 0 ? (
+            memberships.map((membership) => (
+              <div
+                key={membership.user_id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+              >
+                <div>
+                  <div className="font-medium">
+                    {membership.user.display_name}
+                    <span className="ml-2 text-sm font-normal text-muted-foreground">{membership.user.email}</span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <Badge>{formatLabel(membership.role)}</Badge>
+                    <Badge variant="outline">Global {formatLabel(membership.user.role)}</Badge>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  disabled={removeMembershipMutation.isPending}
+                  onClick={() => void handleRemove(membership.user_id)}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))
+          ) : (
+            <StatePanel message="No explicit case memberships yet." />
+          )}
         </div>
       </CardContent>
     </Card>
@@ -261,6 +426,8 @@ export function CaseOverviewPage() {
               </div>
             </CardContent>
           </Card>
+
+          <CaseAccessAdminCard caseId={caseId ?? ""} />
         </div>
       </div>
     </div>

@@ -129,7 +129,7 @@ Startup logging now includes the effective SQLite path, export path, and whether
 - **Fallback shared bearer still exists:** `VITE_WC_API_KEY` / `WC_API_KEY` remain as transitional fallback and break-glass auth ([`apps/desktop/src/config.ts`](../apps/desktop/src/config.ts), [`server.ts`](../apps/api/src/server.ts)).
 - **Approval attribution is partially real now:** package approval now prefers the authenticated principal, stores **`approved_by_user_id`**, and only accepts **`x-wc-actor`** when the request is using API-key fallback ([`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`ai-service.ts`](../apps/api/src/ai-service.ts), [`schema.ts`](../apps/api/src/schema.ts)).
 - **Case access is partially real now:** package/workbench routes now require a **`case_memberships`** row for non-admin session users, while admins still bypass and API-key mode remains an explicit transitional bypass ([`auth.ts`](../apps/api/src/auth.ts), [`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`schema.ts`](../apps/api/src/schema.ts)).
-- **Current limitation:** this slice auto-seeds `case_memberships` when a signed-in user creates a case, but there is not yet a case-membership admin UI for retroactive assignment on older matters.
+- **Membership recovery path now exists:** admins can now list, set, delete, and backfill case memberships for older matters, including an operator-facing panel on [`CaseOverviewPage.tsx`](../apps/desktop/src/pages/cases/CaseOverviewPage.tsx) and the underlying case-membership routes in [`case-catalog-routes.ts`](../apps/api/src/routes/case-catalog-routes.ts).
 - **Package rule actor stamping exists now:** package-rule create/update writes now persist `created_by`, `created_by_user_id`, `updated_by`, and `updated_by_user_id` in the package/workbench slice ([`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`schema.ts`](../apps/api/src/schema.ts)).
 
 ### Target architecture (remaining after the first slice)
@@ -155,7 +155,7 @@ The repo now has the first real principal slice. The remaining auth work is to e
 | --- | --- |
 | **A** | Principal middleware; session login; keep **`WC_API_KEY`** / browser bearer only as **break-glass** or dev fallback. Stop preferring `x-wc-actor` when `request.user` exists. **Implemented for the first vertical slice.** |
 | **B** | Actor stamping on all state-changing writes (approvals, package rules, uploads, connector actions, templates, exports). **Partially implemented**: package run approvals and package-rule create/update now stamp authenticated principals or explicit fallback actors. |
-| **C** | Route guards: case read/write, package run/approve, connector manage, ops/admin. **Partially implemented**: package/workbench case routes now enforce `case_memberships` for non-admin session users with admin override and API-key transitional bypass. |
+| **C** | Route guards: case read/write, package run/approve, connector manage, ops/admin. **Partially implemented**: package/workbench case routes now enforce `case_memberships` for non-admin session users with admin override and API-key transitional bypass, and admins now have a real membership-management/backfill path for legacy matters. |
 | **D** | Remove **`VITE_WC_API_KEY`** from normal hosted usage; retain server **`WC_API_KEY`** only for M2M or break-glass if absolutely required. |
 
 ---

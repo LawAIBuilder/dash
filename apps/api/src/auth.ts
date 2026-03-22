@@ -20,6 +20,19 @@ export interface PublicUser {
   role: UserRole;
 }
 
+export interface CaseMembershipUserSummary extends PublicUser {
+  active: boolean;
+}
+
+export interface CaseMembershipSummary {
+  case_id: string;
+  user_id: string;
+  role: UserRole;
+  created_at: string | null;
+  updated_at: string | null;
+  user: CaseMembershipUserSummary;
+}
+
 type DbUserRow = {
   id: string;
   email: string;
@@ -43,6 +56,15 @@ type DbCaseMembershipRow = {
   case_id: string;
   user_id: string;
   role: string;
+};
+
+type DbCaseMembershipListRow = DbCaseMembershipRow & {
+  created_at: string | null;
+  updated_at: string | null;
+  email: string;
+  display_name: string | null;
+  user_role: string;
+  active: number;
 };
 
 export interface AuthSessionSummary {
@@ -89,6 +111,18 @@ function normalizeRole(value: string | null | undefined): UserRole {
       return value;
     default:
       return "operator";
+  }
+}
+
+export function parseUserRole(value: string | null | undefined): UserRole | null {
+  switch (value) {
+    case "operator":
+    case "reviewer":
+    case "approver":
+    case "admin":
+      return value;
+    default:
+      return null;
   }
 }
 
@@ -326,6 +360,23 @@ export function listUsers(db: Database.Database) {
     .map((row) => asPublicUser(row as Pick<DbUserRow, "id" | "email" | "display_name" | "role">));
 }
 
+function mapCaseMembershipRow(row: DbCaseMembershipListRow): CaseMembershipSummary {
+  return {
+    case_id: row.case_id,
+    user_id: row.user_id,
+    role: normalizeRole(row.role),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    user: {
+      id: row.user_id,
+      email: row.email,
+      display_name: row.display_name?.trim() || row.email,
+      role: normalizeRole(row.user_role),
+      active: row.active === 1
+    }
+  };
+}
+
 export function authenticateUser(db: Database.Database, email: string, password: string): PublicUser | null {
   const normalizedEmail = normalizeEmail(email);
   const user = db
@@ -540,6 +591,37 @@ export function ensureCaseMembership(
   ).run(randomUUID(), input.caseId, input.userId, input.role);
 }
 
+export function listCaseMemberships(db: Database.Database, caseId: string) {
+  return db
+    .prepare(
+      `
+        SELECT
+          cm.case_id,
+          cm.user_id,
+          cm.role,
+          cm.created_at,
+          cm.updated_at,
+          u.email,
+          u.display_name,
+          u.role AS user_role,
+          u.active
+        FROM case_memberships cm
+        JOIN users u ON u.id = cm.user_id
+        WHERE cm.case_id = ?
+        ORDER BY
+          CASE cm.role
+            WHEN 'admin' THEN 0
+            WHEN 'approver' THEN 1
+            WHEN 'reviewer' THEN 2
+            ELSE 3
+          END,
+          u.email ASC
+      `
+    )
+    .all(caseId)
+    .map((row) => mapCaseMembershipRow(row as DbCaseMembershipListRow));
+}
+
 export function getCaseMembership(
   db: Database.Database,
   input: {
@@ -566,6 +648,96 @@ export function getCaseMembership(
     caseId: row.case_id,
     userId: row.user_id,
     role: normalizeRole(row.role)
+  };
+}
+
+export function setCaseMembershipRole(
+  db: Database.Database,
+  input: {
+    caseId: string;
+    userId: string;
+    role: UserRole;
+  }
+) {
+  const user = db
+    .prepare(
+      `
+        SELECT id, email, display_name, role, active
+        FROM users
+        WHERE id = ?
+        LIMIT 1
+      `
+    )
+    .get(input.userId) as
+    | {
+        id: string;
+        email: string;
+        display_name: string | null;
+        role: string;
+        active: number;
+      }
+    | undefined;
+
+  if (!user || user.active !== 1) {
+    return null;
+  }
+
+  ensureCaseMembership(db, {
+    caseId: input.caseId,
+    userId: input.userId,
+    role: input.role
+  });
+
+  return (
+    listCaseMemberships(db, input.caseId).find((membership) => membership.user_id === input.userId) ?? null
+  );
+}
+
+export function deleteCaseMembership(
+  db: Database.Database,
+  input: {
+    caseId: string;
+    userId: string;
+  }
+) {
+  const result = db
+    .prepare(`DELETE FROM case_memberships WHERE case_id = ? AND user_id = ?`)
+    .run(input.caseId, input.userId);
+  return result.changes > 0;
+}
+
+export function backfillCaseMembershipsForCase(db: Database.Database, caseId: string) {
+  const activeUsers = db
+    .prepare(
+      `
+        SELECT id
+        FROM users
+        WHERE active = 1
+        ORDER BY email ASC
+      `
+    )
+    .all() as Array<{ id: string }>;
+
+  const insertMembership = db.prepare(
+    `
+      INSERT INTO case_memberships (id, case_id, user_id, role)
+      VALUES (?, ?, ?, 'operator')
+      ON CONFLICT(case_id, user_id) DO NOTHING
+    `
+  );
+
+  let insertedCount = 0;
+  const runBackfill = db.transaction(() => {
+    for (const user of activeUsers) {
+      const result = insertMembership.run(randomUUID(), caseId, user.id);
+      insertedCount += result.changes;
+    }
+  });
+  runBackfill();
+
+  return {
+    inserted_count: insertedCount,
+    memberships: listCaseMemberships(db, caseId)
   };
 }
 

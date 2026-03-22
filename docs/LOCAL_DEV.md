@@ -68,7 +68,7 @@ If you are using browser session auth locally:
 
 - Do **not** set `VITE_WC_API_KEY`.
 - Use the server bootstrap admin env (`WC_BOOTSTRAP_ADMIN_EMAIL`, `WC_BOOTSTRAP_ADMIN_PASSWORD`) and sign in through the browser.
-- For the current Wave 2 authorization slice, create matters while signed in if you want a non-admin session user to have package/workbench access to that case immediately; case creation now seeds the creator's `case_memberships` row.
+- For the current Wave 2 authorization slice, create matters while signed in if you want a non-admin session user to have package/workbench access to that case immediately; case creation now seeds the creator's `case_memberships` row. Older cases can be backfilled from the admin case-access panel on the overview page.
 - Keep the hostnames aligned. A common local pairing is:
   - desktop on `http://localhost:5173`
   - API on `http://localhost:4000`
