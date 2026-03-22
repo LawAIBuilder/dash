@@ -151,12 +151,6 @@ Prerequisites called out in the threads:
 4. **Deadline extraction** with provenance and review.
 5. **Operator UX:** triage queue before top-level “Mailroom” nav is justified.
 
----
-
-## Related docs
-
-- **[Foundation execution brief](FOUNDATION_EXECUTION_BRIEF_2026-03-21.md)** — Where mailroom sits in execution order (later orchestrated intake; matter console first).
-
 ## 7. Keeping this doc current
 
 When mailroom scope becomes a real epic, either:

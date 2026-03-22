@@ -5,6 +5,7 @@ import Fastify from "fastify";
 import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import { openDatabase } from "./db.js";
+import { getEffectivePaths, validateConfiguredPaths, validateStartupReadiness } from "./readiness.js";
 import { registerCaseCatalogRoutes } from "./routes/case-catalog-routes.js";
 import { createCaseRouteGuards } from "./routes/case-guards.js";
 import { registerCaseDataRoutes } from "./routes/case-data-routes.js";
@@ -31,6 +32,16 @@ import {
 import { buildApiErrorResponse } from "./error-response.js";
 import { createFixedWindowRateLimiter } from "./rate-limit.js";
 import { consumeDailyUsageQuota } from "./usage-counters.js";
+
+const effectivePaths = getEffectivePaths();
+const pathValidation = await validateConfiguredPaths(effectivePaths);
+if (!pathValidation.ok) {
+  for (const error of pathValidation.errors) {
+    // eslint-disable-next-line no-console
+    console.error(`[startup-readiness] ${error}`);
+  }
+  process.exit(1);
+}
 
 const db = openDatabase();
 seedFoundation(db);
@@ -134,6 +145,24 @@ async function fetchPdfBytesForSourceItem(sourceItemId: string): Promise<Buffer>
 
 const TRUST_PROXY = readBooleanEnv("WC_TRUST_PROXY", false);
 const app = Fastify({ logger: true, trustProxy: TRUST_PROXY });
+
+const startupValidation = await validateStartupReadiness(db, effectivePaths);
+if (!startupValidation.ok) {
+  for (const error of startupValidation.errors) {
+    app.log.error({ error }, "startup readiness validation failed");
+  }
+  process.exit(1);
+}
+app.log.info(
+  {
+    sqlitePath: effectivePaths.sqlitePath,
+    exportDir: effectivePaths.exportDir,
+    exportDirConfigured: effectivePaths.exportDirConfigured,
+    ocrWorkerExpected: true
+  },
+  "startup readiness validated"
+);
+
 app.setErrorHandler((error, _request, reply) => {
   app.log.error(error);
   const response = buildApiErrorResponse(error);

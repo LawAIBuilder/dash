@@ -11,6 +11,15 @@ export interface WorkerHealthRecord {
   metadata_json: string | null;
 }
 
+export interface WorkerHealthSummary {
+  worker: WorkerHealthRecord | null;
+  heartbeatPresent: boolean;
+  stale: boolean;
+  ageMs: number | null;
+  lastHeartbeatAt: string | null;
+  status: string | null;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -95,4 +104,55 @@ export function readWorkerHealth(
     .get(workerName) as WorkerHealthRecord | undefined;
 
   return row ?? null;
+}
+
+export function getWorkerHealthSummary(
+  db: Database.Database,
+  workerName: string,
+  staleAfterMs = 45_000
+): WorkerHealthSummary {
+  const worker = readWorkerHealth(db, workerName);
+  const now = Date.now();
+  const heartbeatTime = worker ? new Date(worker.last_heartbeat_at).getTime() : 0;
+  const ageMs = heartbeatTime > 0 ? Math.max(0, now - heartbeatTime) : null;
+
+  return {
+    worker,
+    heartbeatPresent: Boolean(worker),
+    stale: ageMs === null ? true : ageMs > staleAfterMs,
+    ageMs,
+    lastHeartbeatAt: worker?.last_heartbeat_at ?? null,
+    status: worker?.status ?? null
+  };
+}
+
+export function probeWorkerHeartbeatWrite(
+  db: Database.Database,
+  workerName = "__worker_health_probe__"
+) {
+  const savepointName = "worker_health_probe";
+
+  try {
+    db.exec(`SAVEPOINT ${savepointName}`);
+    writeWorkerHeartbeat(db, {
+      workerName,
+      status: "starting",
+      metadata: { probe: true }
+    });
+    db.exec(`ROLLBACK TO ${savepointName}`);
+    db.exec(`RELEASE ${savepointName}`);
+    return true;
+  } catch {
+    try {
+      db.exec(`ROLLBACK TO ${savepointName}`);
+    } catch {
+      // Ignore cleanup failures if the savepoint was never established.
+    }
+    try {
+      db.exec(`RELEASE ${savepointName}`);
+    } catch {
+      // Ignore cleanup failures during probe rollback.
+    }
+    return false;
+  }
 }

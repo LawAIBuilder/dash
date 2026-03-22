@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -17,6 +17,7 @@ describe("package run routes", () => {
     process.env.WC_SKIP_LISTEN = "1";
     process.env.WC_SQLITE_PATH = dbPath;
     process.env.WC_EXPORT_DIR = join(tmpDir, "package_exports");
+    mkdirSync(process.env.WC_EXPORT_DIR, { recursive: true });
     const mod = await import("../server.js");
     app = mod.app;
     db = new Database(dbPath);

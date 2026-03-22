@@ -3,7 +3,10 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { authoritativeMigrations } from "./schema.js";
 
-function resolveDefaultDbPath() {
+export function resolveDatabasePath(dbPath?: string) {
+  if (dbPath) {
+    return resolve(dbPath);
+  }
   const fromEnv = process.env.WC_SQLITE_PATH?.trim();
   if (fromEnv) {
     return resolve(fromEnv);
@@ -92,7 +95,7 @@ function applyAuthoritativeMigrations(db: Database.Database) {
 }
 
 export function openDatabase(dbPath?: string): Database.Database {
-  const path = dbPath ?? resolveDefaultDbPath();
+  const path = resolveDatabasePath(dbPath);
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
@@ -101,4 +104,27 @@ export function openDatabase(dbPath?: string): Database.Database {
   applyAuthoritativeMigrations(db);
   assertRuntimeCompatibility(db);
   return db;
+}
+
+export function getLastAppliedMigrationId(db: Database.Database) {
+  const tableExists = db
+    .prepare(
+      `
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'authoritative_migrations'
+        LIMIT 1
+      `
+    )
+    .get() as { name: string } | undefined;
+
+  if (!tableExists) {
+    return null;
+  }
+
+  const row = db
+    .prepare(`SELECT id FROM authoritative_migrations ORDER BY applied_at DESC, id DESC LIMIT 1`)
+    .get() as { id: string } | undefined;
+
+  return row?.id ?? null;
 }

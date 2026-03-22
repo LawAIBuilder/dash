@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -17,6 +17,7 @@ describe("daily usage quota routes", () => {
     process.env.WC_SKIP_LISTEN = "1";
     process.env.WC_SQLITE_PATH = dbPath;
     process.env.WC_EXPORT_DIR = join(tmpDir, "package_exports");
+    mkdirSync(process.env.WC_EXPORT_DIR, { recursive: true });
     process.env.WC_AI_ASSEMBLE_DAILY_LIMIT = "1";
     process.env.WC_PACKAGE_RUN_DAILY_LIMIT = "1";
     delete process.env.OPENAI_API_KEY;

@@ -40,6 +40,7 @@ Without the worker, **Queue OCR** only enqueues rows; text is not produced until
 
 - Set **`WC_API_KEY`** on the API; clients must send `Authorization: Bearer <same value>`.
 - Desktop / browser: **`VITE_WC_API_KEY`** must match (see [DOGFOOD.md](./DOGFOOD.md)).
+- This shared-key browser model is **transitional hosted auth**, not the final security model for the product. See [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md).
 
 ## Box (OCR worker + sync)
 
@@ -110,6 +111,13 @@ CI should run the same; the hosted API must run **built** `dist`, not `tsx` dev.
 - **SQLite:** mount a **persistent volume**; set **`WC_SQLITE_PATH`** to an **absolute** path on that volume (same path concept the supervisor and both children use).
 - **Bind:** `WC_API_HOST=0.0.0.0`; **`PORT`** from the platform.
 
+### 2a. Hosted startup contract
+
+- Startup now validates the SQLite parent directory before the API accepts requests.
+- If **`WC_EXPORT_DIR`** is configured, startup also validates that directory exists and is writable.
+- Invalid hosted path configuration should stop startup **before** the server begins accepting traffic.
+- Operators should expect startup logging to include the effective SQLite path, export path, and the hosted readiness context.
+
 ### 3. Production environment contract
 
 Set these in the host **secret store** / env UI (never commit real values):
@@ -149,8 +157,16 @@ Rebuild and redeploy the static app whenever the API URL or key strategy changes
 ### 5. Post-deploy smoke checks
 
 - `GET https://<api-origin>/health` → 200 (no auth; safe for load balancers).
+- `GET https://<api-origin>/api/workers/ocr/health` → worker summary is present and `stale` is understandable for the current worker state.
+- `GET https://<api-origin>/api/ops/readiness` → confirms actual db path, export path, writable-path state, migration id, Box/OpenAI presence booleans, and OCR stale summary.
 - Open `https://<app-origin>/` in a browser; confirm no mixed-content (HTTPS → HTTP API is blocked by browsers—API must be HTTPS too).
 - Exercise one authenticated read (e.g. case list) if `WC_API_KEY` is set.
+
+### 5a. Required writable paths
+
+- **SQLite parent dir:** the parent directory of `WC_SQLITE_PATH` must exist and be writable.
+- **Configured export dir:** if `WC_EXPORT_DIR` is set, it must exist and be writable.
+- **Readiness route:** `/api/ops/readiness` is the operator-facing way to confirm current path resolution and writeability without digging through env or logs manually.
 
 ### 6. Backup and restore (minimum)
 
