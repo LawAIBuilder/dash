@@ -12,9 +12,16 @@ The goal is not to replace either audit, but to merge them into a sharper execut
 Related strategic docs:
 
 - [Intelligence Spine And Corpus Vision](./INTELLIGENCE_SPINE_AND_CORPUS_VISION_2026-03-21.md)
+- [Intelligence Build Backlog](./INTELLIGENCE_BUILD_BACKLOG_2026-03-21.md)
 - [Package Studio Contract](./package-studio/README.md)
 
 ## What Changed After The Second Pass
+
+Historical note:
+
+- The specific `gatherDocumentSummaries()` join mismatch cited below was real at audit time and was correctly escalated.
+- That exact join bug has since been fixed in source.
+- The section remains here because it explains why retrieval correctness moved to the front of the roadmap, not because the current branch still has that exact SQL defect.
 
 After reviewing the second audit against source, I would revise the plan in four important ways.
 

@@ -13,7 +13,11 @@ This doc preserves the highest-value product and data ideas from:
 - `~/Downloads/333.md`
 - `~/Downloads/44.md`
 
+These local `~/.cursor/plans/...` and `~/Downloads/...` paths are archive references from one machine. The canonical preserved copy is this repo doc plus its execution companion, [Intelligence Build Backlog](./INTELLIGENCE_BUILD_BACKLOG_2026-03-21.md).
+
 The goal is not to promote every brainstorm into a build commitment. The goal is to keep the durable ideas versioned in the repo so they are not lost while day-to-day hardening and shipping continues.
+
+This preservation pass entered the repo in commit `5b50ad5`.
 
 ## Current Call
 
@@ -29,6 +33,9 @@ This is consistent with:
 - [Package Studio Contract](./package-studio/README.md)
 - [Alpha Stop Line](./package-studio/alpha-stop-line.md)
 - [Code Audit Reconciliation](./CODE_AUDIT_RECONCILIATION_2026-03-21.md)
+- [Intelligence Build Backlog](./INTELLIGENCE_BUILD_BACKLOG_2026-03-21.md)
+
+The broader archived `unified_case_engine_577b23f6.plan.md` still matters as the wider platform/auth/storage plan. This doc and the linked backlog keep the runner/workbench-first intelligence rules explicit inside the repo.
 
 ## Durable Ideas Worth Keeping
 
@@ -241,6 +248,7 @@ If a future idea becomes concrete enough to build against, promote it into:
 
 - [docs/package-studio](./package-studio/)
 - [docs/CODE_AUDIT_RECONCILIATION_2026-03-21.md](./CODE_AUDIT_RECONCILIATION_2026-03-21.md)
+- [docs/INTELLIGENCE_BUILD_BACKLOG_2026-03-21.md](./INTELLIGENCE_BUILD_BACKLOG_2026-03-21.md)
 - a dedicated contract/spec doc under `docs/`
 
 ## Bottom Line
