@@ -401,10 +401,9 @@ It is **not**:
 ### Next 30 days
 
 1. Treat hosted internal web as the primary product mode in docs and roadmap.
-2. Extend [DEPLOY.md](./DEPLOY.md) with the full hosted env matrix and Railway/static-host checklist.
-3. Add one deployment/runbook doc for “hosted internal web.”
-4. Keep local terminal startup documented only as development/operator mode.
-5. Make one actual hosted environment the reference environment and use it.
+2. Use [DEPLOY.md](./DEPLOY.md) **Phase 1 — Hosted internal web: execution checklist** (env matrix, build, smoke, backups) and ticket backlog [HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md).
+3. Keep local terminal startup documented only as development/operator mode ([LOCAL_DEV.md](./LOCAL_DEV.md)).
+4. Make one actual hosted environment the reference environment and use it (backlog **HST-01**).
 
 ### Next 60 days
 
