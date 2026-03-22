@@ -53,22 +53,26 @@ These are **requirements**, not suggestions:
 ### Current ops surface (implemented)
 
 - **`GET /health`** — Returns ok, service name, `startup_recovery` ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts)). Listed as load-balancer-safe in [`DEPLOY.md`](./DEPLOY.md).
-- **`GET /api/workers/ocr/health`** — Worker record, `stale` if heartbeat older than 45s ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts)).
+- **`GET /api/workers/ocr/health`** — Worker record, `stale` if heartbeat older than 45s ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts)). When `WC_API_KEY` is configured, this stays behind the normal bearer gate.
+- **`GET /api/ops/readiness`** — Operator snapshot of effective paths, writable state, last migration id, non-secret Box/OpenAI presence booleans, OCR heartbeat summary, and startup recovery ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts), [`readiness.ts`](../apps/api/src/readiness.ts)).
 
-### Planned startup validation (to implement)
+### Round 1 startup validation (implemented)
 
-On API boot, **fail fast** (non-zero exit) when:
+On API boot, the API now **fails fast** (non-zero exit) when:
 
 - The directory for `WC_SQLITE_PATH` is missing or not writable.
 - Export/artifact directory is configured but not writable.
 
-On startup, **log** at minimum: effective DB path, export path (if any), bind host/port, whether OCR worker subprocess is enabled.
+The implementation is split in two phases:
 
-Run a **startup self-check** that verifies: migrations applied, DB writable, worker heartbeat storage writable (if worker enabled), export dir writable (if configured). (DB migrations and worker health patterns exist in [`db.ts`](../apps/api/src/db.ts) and [`worker-health`](../apps/api/src/worker-health.ts); wiring a single gate is **planned**.)
+1. **Pre-DB path validation** before `openDatabase()` so invalid hosted mounts fail before the app starts serving ([`server.ts`](../apps/api/src/server.ts), [`readiness.ts`](../apps/api/src/readiness.ts)).
+2. **Post-DB readiness validation** after migrations/seed/recovery to verify DB writability and worker-heartbeat writability against the real runtime schema ([`server.ts`](../apps/api/src/server.ts), [`readiness.ts`](../apps/api/src/readiness.ts), [`worker-health.ts`](../apps/api/src/worker-health.ts)).
 
-### Planned consolidated readiness endpoint
+Startup logging now includes the effective SQLite path, export path, and whether the export directory was explicitly configured ([`server.ts`](../apps/api/src/server.ts)).
 
-**`GET /api/ops/readiness`** (planned) — Single JSON contract for operators, distinct from **`/health`**:
+### Round 1 consolidated readiness endpoint (implemented)
+
+**`GET /api/ops/readiness`** is now the single JSON contract for operators, distinct from **`/health`**:
 
 | Field / concern | Intent |
 | --- | --- |
@@ -81,7 +85,9 @@ Run a **startup self-check** that verifies: migrations applied, DB writable, wor
 | `box_configured` | Non-secret boolean |
 | `startup_recovery` | Pass-through from existing recovery summary ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts)) |
 
-**Security:** This endpoint must not leak secrets; it may be restricted to same trust boundary as other authenticated routes once auth lands.
+**Semantics:** The current top-level `ok` indicates the readiness route responded; operators should inspect nested writable/config/stale fields for actual runtime status.
+
+**Security:** This endpoint does not leak secrets and already sits behind the same bearer boundary as the rest of the API when `WC_API_KEY` is configured ([`server.ts`](../apps/api/src/server.ts)).
 
 ### Backups and restore
 
@@ -104,9 +110,9 @@ Include a **restore drill** in docs: verify file permissions, run migration stat
 6. Restore from backup  
 7. Rotate **`WC_API_KEY`** during auth transition (shared secret still in use today)
 
-### Gap note
+### Remaining gap note
 
-[`DEPLOY.md`](./DEPLOY.md) explains pieces, but a **single checklist** and **readiness contract** matching the gates above must stay aligned with code as it ships. [`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts) is useful but **shallow** for “internal default product” until `/api/ops/readiness` and startup validation exist.
+[`DEPLOY.md`](./DEPLOY.md) and [`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts) now cover the basic hosted readiness contract. The remaining hosted-ops gap is not “invent readiness,” but to finish backup/restore procedure, restore drills, and named operator runbooks.
 
 ---
 
@@ -249,7 +255,7 @@ Projection data for many of these concepts already exists in the API projection 
 | Wave | Focus |
 | --- | --- |
 | **0** | Doc + checklist lock (this brief + [`HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md`](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md)); align [`DEPLOY.md`](./DEPLOY.md) with readiness gates. |
-| **1** | Hosted readiness: startup validation, **`GET /api/ops/readiness`**, backup/restore procedure, runbooks — implement HST items through backlog. |
+| **1** | Hosted readiness follow-through: backup/restore procedure, restore drills, and runbooks. Startup validation and **`GET /api/ops/readiness`** are already implemented on `main`. |
 | **2** | Auth: session cookies, `request.user`, actor stamping, route guards, remove shared browser key from normal hosted use. |
 | **3** | Blueprints: `blueprints` + `blueprint_versions`, wire three package types, migrate prompts/retrieval references incrementally. |
 | **4** | Matter operating console: evolve `CaseOverviewPage` toward the six-panel contract. |
@@ -267,6 +273,7 @@ Projection data for many of these concepts already exists in the API projection 
 | SPA + API + worker + SQLite | [`HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md`](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md), [`server.ts`](../apps/api/src/server.ts), [`db.ts`](../apps/api/src/db.ts) |
 | `start:railway` blessed | [`package.json`](../package.json), [`start-railway.ts`](../apps/api/src/start-railway.ts) |
 | Ops health endpoints | [`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts) |
+| Startup path validation + readiness snapshot | [`readiness.ts`](../apps/api/src/readiness.ts), [`server.ts`](../apps/api/src/server.ts) |
 | Shared API key auth | [`config.ts`](../apps/desktop/src/config.ts), [`server.ts`](../apps/api/src/server.ts) |
 | `x-wc-actor` on approve | [`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts) |
 | Dual AI paths | [`ai-service.ts`](../apps/api/src/ai-service.ts), [`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`CaseAIPage.tsx`](../apps/desktop/src/pages/cases/CaseAIPage.tsx) |

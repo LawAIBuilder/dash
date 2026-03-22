@@ -23,6 +23,7 @@ Without the worker, **Queue OCR** only enqueues rows; text is not produced until
 - Default DB path (from API cwd): `apps/api/data/authoritative.sqlite`.
 - Override with **`WC_SQLITE_PATH`** (absolute path recommended in production).
 - Mount a **persistent volume** at the directory containing that file (or set the env to a path on the volume).
+- Create the parent directory on that volume **before first start**; startup now fails fast if the SQLite parent directory is missing or not writable.
 - Back up the file + `-wal` / `-shm` when the API is stopped or via SQLite backup API.
 
 ## Listen address
@@ -157,8 +158,8 @@ Rebuild and redeploy the static app whenever the API URL or key strategy changes
 ### 5. Post-deploy smoke checks
 
 - `GET https://<api-origin>/health` → 200 (no auth; safe for load balancers).
-- `GET https://<api-origin>/api/workers/ocr/health` → worker summary is present and `stale` is understandable for the current worker state.
-- `GET https://<api-origin>/api/ops/readiness` → confirms actual db path, export path, writable-path state, migration id, Box/OpenAI presence booleans, and OCR stale summary.
+- `GET https://<api-origin>/api/workers/ocr/health` → worker summary is present and `stale` is understandable for the current worker state. Send `Authorization: Bearer <WC_API_KEY>` if `WC_API_KEY` is configured.
+- `GET https://<api-origin>/api/ops/readiness` → confirms actual db path, export path, writable-path state, migration id, Box/OpenAI presence booleans, and OCR stale summary. Send `Authorization: Bearer <WC_API_KEY>` if `WC_API_KEY` is configured.
 - Open `https://<app-origin>/` in a browser; confirm no mixed-content (HTTPS → HTTP API is blocked by browsers—API must be HTTPS too).
 - Exercise one authenticated read (e.g. case list) if `WC_API_KEY` is set.
 
@@ -167,6 +168,7 @@ Rebuild and redeploy the static app whenever the API URL or key strategy changes
 - **SQLite parent dir:** the parent directory of `WC_SQLITE_PATH` must exist and be writable.
 - **Configured export dir:** if `WC_EXPORT_DIR` is set, it must exist and be writable.
 - **Readiness route:** `/api/ops/readiness` is the operator-facing way to confirm current path resolution and writeability without digging through env or logs manually.
+- **Readiness semantics:** inspect the nested writable/config/stale fields; the current top-level `ok` indicates the readiness route itself responded, not that every dependency is green.
 
 ### 6. Backup and restore (minimum)
 
