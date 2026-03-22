@@ -1257,5 +1257,45 @@ export const authoritativeMigrations: AuthoritativeMigration[] = [
         CREATE INDEX IF NOT EXISTS idx_package_rules_updated_by_user ON package_rules(updated_by_user_id);
       `);
     }
+  },
+  {
+    id: "0025_document_template_actor_stamps",
+    description: "Actor stamping for user document templates and saved fills",
+    up(db) {
+      addColumnIfMissing(db, "user_document_templates", "created_by", "created_by TEXT");
+      addColumnIfMissing(
+        db,
+        "user_document_templates",
+        "created_by_user_id",
+        "created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL"
+      );
+      addColumnIfMissing(db, "user_document_templates", "updated_by", "updated_by TEXT");
+      addColumnIfMissing(
+        db,
+        "user_document_templates",
+        "updated_by_user_id",
+        "updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL"
+      );
+      addColumnIfMissing(db, "user_document_template_fills", "created_by", "created_by TEXT");
+      addColumnIfMissing(
+        db,
+        "user_document_template_fills",
+        "created_by_user_id",
+        "created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL"
+      );
+      addColumnIfMissing(db, "user_document_template_fills", "updated_by", "updated_by TEXT");
+      addColumnIfMissing(
+        db,
+        "user_document_template_fills",
+        "updated_by_user_id",
+        "updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL"
+      );
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_user_document_templates_created_by_user ON user_document_templates(created_by_user_id);
+        CREATE INDEX IF NOT EXISTS idx_user_document_templates_updated_by_user ON user_document_templates(updated_by_user_id);
+        CREATE INDEX IF NOT EXISTS idx_user_document_template_fills_created_by_user ON user_document_template_fills(created_by_user_id);
+        CREATE INDEX IF NOT EXISTS idx_user_document_template_fills_updated_by_user ON user_document_template_fills(updated_by_user_id);
+      `);
+    }
   }
 ];

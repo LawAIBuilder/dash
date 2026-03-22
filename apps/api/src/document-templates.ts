@@ -24,6 +24,10 @@ export type UserDocumentTemplateRow = {
   body_markdown: string;
   fields_json: string;
   ai_hints: string | null;
+  created_by: string | null;
+  created_by_user_id: string | null;
+  updated_by: string | null;
+  updated_by_user_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -36,6 +40,10 @@ export type UserDocumentTemplateFillRow = {
   rendered_markdown: string;
   source_item_id: string | null;
   status: string;
+  created_by: string | null;
+  created_by_user_id: string | null;
+  updated_by: string | null;
+  updated_by_user_id: string | null;
   created_at: string;
   updated_at: string | null;
 };
@@ -166,7 +174,20 @@ export function listUserDocumentTemplates(db: Database.Database, caseId: string)
   return db
     .prepare(
       `
-        SELECT id, case_id, name, description, body_markdown, fields_json, ai_hints, created_at, updated_at
+        SELECT
+          id,
+          case_id,
+          name,
+          description,
+          body_markdown,
+          fields_json,
+          ai_hints,
+          created_by,
+          created_by_user_id,
+          updated_by,
+          updated_by_user_id,
+          created_at,
+          updated_at
         FROM user_document_templates
         WHERE case_id = ?
         ORDER BY updated_at DESC, name ASC
@@ -179,7 +200,20 @@ export function getUserDocumentTemplate(db: Database.Database, templateId: strin
   return db
     .prepare(
       `
-        SELECT id, case_id, name, description, body_markdown, fields_json, ai_hints, created_at, updated_at
+        SELECT
+          id,
+          case_id,
+          name,
+          description,
+          body_markdown,
+          fields_json,
+          ai_hints,
+          created_by,
+          created_by_user_id,
+          updated_by,
+          updated_by_user_id,
+          created_at,
+          updated_at
         FROM user_document_templates
         WHERE id = ? AND case_id = ?
         LIMIT 1
@@ -197,6 +231,8 @@ export function createUserDocumentTemplate(
     body_markdown: string;
     fields?: TemplateFieldDef[] | null;
     ai_hints?: string | null;
+    actorLabel?: string | null;
+    actorUserId?: string | null;
   }
 ) {
   return db.transaction(() => {
@@ -207,9 +243,21 @@ export function createUserDocumentTemplate(
     db.prepare(
       `
       INSERT INTO user_document_templates
-        (id, case_id, name, description, body_markdown, fields_json, ai_hints)
+        (
+          id,
+          case_id,
+          name,
+          description,
+          body_markdown,
+          fields_json,
+          ai_hints,
+          created_by,
+          created_by_user_id,
+          updated_by,
+          updated_by_user_id
+        )
       VALUES
-        (?, ?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     ).run(
       id,
@@ -218,7 +266,11 @@ export function createUserDocumentTemplate(
       input.description?.trim() || null,
       input.body_markdown,
       JSON.stringify(fields),
-      input.ai_hints?.trim() || null
+      input.ai_hints?.trim() || null,
+      input.actorLabel ?? null,
+      input.actorUserId ?? null,
+      input.actorLabel ?? null,
+      input.actorUserId ?? null
     );
     return getUserDocumentTemplate(db, id, input.caseId) ?? null;
   })();
@@ -234,6 +286,8 @@ export function updateUserDocumentTemplate(
     body_markdown?: string | null;
     fields?: TemplateFieldDef[] | null;
     ai_hints?: string | null;
+    actorLabel?: string | null;
+    actorUserId?: string | null;
   }
 ) {
   return db.transaction(() => {
@@ -260,10 +314,22 @@ export function updateUserDocumentTemplate(
           body_markdown = ?,
           fields_json = ?,
           ai_hints = ?,
+          updated_by = ?,
+          updated_by_user_id = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND case_id = ?
     `
-    ).run(name, description, body, JSON.stringify(fields), ai_hints, input.templateId, input.caseId);
+    ).run(
+      name,
+      description,
+      body,
+      JSON.stringify(fields),
+      ai_hints,
+      input.actorLabel ?? existing.updated_by ?? existing.created_by ?? null,
+      input.actorUserId ?? existing.updated_by_user_id ?? existing.created_by_user_id ?? null,
+      input.templateId,
+      input.caseId
+    );
 
     return getUserDocumentTemplate(db, input.templateId, input.caseId) ?? null;
   })();
@@ -283,6 +349,8 @@ export function saveTemplateFill(
     rendered_markdown: string;
     source_item_id?: string | null;
     status?: string;
+    actorLabel?: string | null;
+    actorUserId?: string | null;
   }
 ) {
   const template = getUserDocumentTemplate(db, input.templateId, input.caseId);
@@ -300,9 +368,21 @@ export function saveTemplateFill(
   db.prepare(
     `
       INSERT INTO user_document_template_fills
-        (id, template_id, case_id, values_json, rendered_markdown, source_item_id, status)
+        (
+          id,
+          template_id,
+          case_id,
+          values_json,
+          rendered_markdown,
+          source_item_id,
+          status,
+          created_by,
+          created_by_user_id,
+          updated_by,
+          updated_by_user_id
+        )
       VALUES
-        (?, ?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
   ).run(
     id,
@@ -311,14 +391,31 @@ export function saveTemplateFill(
     JSON.stringify(input.values),
     input.rendered_markdown,
     input.source_item_id ?? null,
-    input.status?.trim() || "draft"
+    input.status?.trim() || "draft",
+    input.actorLabel ?? null,
+    input.actorUserId ?? null,
+    input.actorLabel ?? null,
+    input.actorUserId ?? null
   );
   return {
     ok: true as const,
     row: db
       .prepare(
         `
-        SELECT id, template_id, case_id, values_json, rendered_markdown, source_item_id, status, created_at, updated_at
+        SELECT
+          id,
+          template_id,
+          case_id,
+          values_json,
+          rendered_markdown,
+          source_item_id,
+          status,
+          created_by,
+          created_by_user_id,
+          updated_by,
+          updated_by_user_id,
+          created_at,
+          updated_at
         FROM user_document_template_fills
         WHERE id = ?
       `
@@ -331,7 +428,20 @@ export function getTemplateFill(db: Database.Database, fillId: string, caseId: s
   return db
     .prepare(
       `
-        SELECT id, template_id, case_id, values_json, rendered_markdown, source_item_id, status, created_at, updated_at
+        SELECT
+          id,
+          template_id,
+          case_id,
+          values_json,
+          rendered_markdown,
+          source_item_id,
+          status,
+          created_by,
+          created_by_user_id,
+          updated_by,
+          updated_by_user_id,
+          created_at,
+          updated_at
         FROM user_document_template_fills
         WHERE id = ? AND case_id = ?
         LIMIT 1
@@ -348,6 +458,8 @@ export function updateTemplateFill(
     values?: Record<string, string> | null;
     rendered_markdown?: string | null;
     status?: string | null;
+    actorLabel?: string | null;
+    actorUserId?: string | null;
   }
 ) {
   const existing = getTemplateFill(db, input.fillId, input.caseId);
@@ -376,10 +488,20 @@ export function updateTemplateFill(
       SET values_json = ?,
           rendered_markdown = ?,
           status = ?,
+          updated_by = ?,
+          updated_by_user_id = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ? AND case_id = ?
     `
-  ).run(JSON.stringify(values), rendered, status, input.fillId, input.caseId);
+  ).run(
+    JSON.stringify(values),
+    rendered,
+    status,
+    input.actorLabel ?? existing.updated_by ?? existing.created_by ?? null,
+    input.actorUserId ?? existing.updated_by_user_id ?? existing.created_by_user_id ?? null,
+    input.fillId,
+    input.caseId
+  );
 
   return getTemplateFill(db, input.fillId, input.caseId) ?? null;
 }
@@ -394,7 +516,20 @@ export function listTemplateFills(db: Database.Database, caseId: string, templat
     return db
       .prepare(
         `
-          SELECT id, template_id, case_id, values_json, rendered_markdown, source_item_id, status, created_at, updated_at
+          SELECT
+            id,
+            template_id,
+            case_id,
+            values_json,
+            rendered_markdown,
+            source_item_id,
+            status,
+            created_by,
+            created_by_user_id,
+            updated_by,
+            updated_by_user_id,
+            created_at,
+            updated_at
           FROM user_document_template_fills
           WHERE case_id = ? AND template_id = ?
           ORDER BY updated_at DESC, created_at DESC
@@ -405,7 +540,20 @@ export function listTemplateFills(db: Database.Database, caseId: string, templat
   return db
     .prepare(
       `
-        SELECT id, template_id, case_id, values_json, rendered_markdown, source_item_id, status, created_at, updated_at
+        SELECT
+          id,
+          template_id,
+          case_id,
+          values_json,
+          rendered_markdown,
+          source_item_id,
+          status,
+          created_by,
+          created_by_user_id,
+          updated_by,
+          updated_by_user_id,
+          created_at,
+          updated_at
         FROM user_document_template_fills
         WHERE case_id = ?
         ORDER BY updated_at DESC, created_at DESC
@@ -424,6 +572,10 @@ export function serializeUserDocumentTemplate(row: UserDocumentTemplateRow) {
     body_markdown: row.body_markdown,
     fields: parseFieldsJson(row.fields_json),
     ai_hints: row.ai_hints,
+    created_by: row.created_by,
+    created_by_user_id: row.created_by_user_id,
+    updated_by: row.updated_by,
+    updated_by_user_id: row.updated_by_user_id,
     created_at: row.created_at,
     updated_at: row.updated_at
   };
@@ -444,6 +596,10 @@ export function serializeUserDocumentFill(row: UserDocumentTemplateFillRow) {
     rendered_markdown: row.rendered_markdown,
     source_item_id: row.source_item_id,
     status: row.status,
+    created_by: row.created_by,
+    created_by_user_id: row.created_by_user_id,
+    updated_by: row.updated_by,
+    updated_by_user_id: row.updated_by_user_id,
     created_at: row.created_at,
     updated_at: row.updated_at
   };

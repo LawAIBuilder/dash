@@ -40,10 +40,11 @@ Without the worker, **Queue OCR** only enqueues rows; text is not produced until
 ## Browser auth and fallback API key
 
 - **Preferred hosted browser auth:** set **`WC_SESSION_SECRET`** and bootstrap at least one admin with **`WC_BOOTSTRAP_ADMIN_EMAIL`** and **`WC_BOOTSTRAP_ADMIN_PASSWORD`**. The API then issues an HTTP-only session cookie through **`POST /api/auth/login`**.
-- **Current Wave 2 authorization slice:** non-admin session users now need a **`case_memberships`** row for case access across the case catalog (`GET /api/cases`, `GET/PATCH /api/cases/:caseId`), package/workbench routes, case-data routes, and exhibit/packet routes; cases created through session auth automatically seed membership for the creator.
+- **Current Wave 2 authorization slice:** non-admin session users now need a **`case_memberships`** row for case access across the case catalog (`GET /api/cases`, `GET/PATCH /api/cases/:caseId`), package/workbench routes, case-data routes, exhibit/packet routes, and document-template routes; cases created through session auth automatically seed membership for the creator.
 - **Current recovery path for older cases:** admins can now manage case memberships and run a per-case backfill for active users from the matter overview or the case-membership API routes. That fixes legacy cases that predate membership seeding without raw SQL.
 - **Shared bearer fallback:** **`WC_API_KEY`** remains available for break-glass, machine-to-machine, and transitional internal use. It is no longer the preferred normal browser path.
-- **Browser bundle fallback:** only set **`VITE_WC_API_KEY`** if you are intentionally still using shared browser bearer mode. It is **not** required when hosted browser login is enabled.
+- **Browser bundle fallback:** only set **`VITE_WC_API_KEY`** if you are intentionally still using shared browser bearer mode, and pair it with **`VITE_WC_ENABLE_API_KEY_FALLBACK=1`**. It is **not** required when hosted browser login is enabled.
+- **Login hardening:** `POST /api/auth/login` now uses a fixed-window rate limit. Tune it with **`WC_AUTH_LOGIN_RATE_LIMIT_MAX`** and **`WC_AUTH_LOGIN_RATE_LIMIT_WINDOW_MS`** if hosted traffic patterns require it.
 - This repo now supports both modes, but the shared-key browser model is still **transitional hosted auth**, not the final security model. See [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md).
 
 ### Current connector auth split
@@ -144,6 +145,8 @@ Set these in the host **secret store** / env UI (never commit real values):
 | `WC_TRUST_PROXY` | If behind proxy/LB | `true` so client IP and rate limits are correct. |
 | `WC_SESSION_SECRET` | Strongly recommended for hosted browser use | Enables HTTP-only browser sessions; required for `/api/auth/login`. |
 | `WC_SESSION_TTL_HOURS` | Optional | Session lifetime; defaults to `12`. |
+| `WC_AUTH_LOGIN_RATE_LIMIT_MAX` | Optional | Fixed-window cap for `POST /api/auth/login`; defaults to `8` attempts per key/window. |
+| `WC_AUTH_LOGIN_RATE_LIMIT_WINDOW_MS` | Optional | Login rate-limit window in milliseconds; defaults to `300000` (5 minutes). |
 | `WC_BOOTSTRAP_ADMIN_EMAIL` | Strongly recommended for first hosted login | Seeds the first admin account at startup if missing. |
 | `WC_BOOTSTRAP_ADMIN_PASSWORD` | Strongly recommended for first hosted login | Pairs with bootstrap admin email; store in secret manager only. |
 | `WC_BOOTSTRAP_ADMIN_NAME` | Optional | Friendly name for the bootstrap admin account. |
@@ -165,6 +168,7 @@ Set these in the host **secret store** / env UI (never commit real values):
 |----------|--------|
 | `VITE_API_BASE_URL` | HTTPS origin of the API, e.g. `https://api.yourdomain.com`. |
 | `VITE_WC_API_KEY` | Only if intentionally using shared bearer fallback. **Not a secret** in the browser bundle—acceptable only for **trusted internal** use. |
+| `VITE_WC_ENABLE_API_KEY_FALLBACK` | Must be `1` to actually send `VITE_WC_API_KEY` from the browser bundle. Leave unset for normal hosted session auth. |
 
 Rebuild and redeploy the static app whenever the API URL or key strategy changes.
 

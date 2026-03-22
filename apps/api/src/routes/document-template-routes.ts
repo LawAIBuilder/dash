@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   MAX_TEMPLATE_BODY_MARKDOWN,
   buildFieldsForRender,
@@ -18,6 +18,7 @@ import {
   updateUserDocumentTemplate,
   validateValuesPayload
 } from "../document-templates.js";
+import { requireCaseAccess, requireWriteActor } from "../auth.js";
 import type { CaseRouteReply } from "./types.js";
 
 export interface RegisterDocumentTemplateRoutesInput {
@@ -29,9 +30,16 @@ export interface RegisterDocumentTemplateRoutesInput {
 export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRoutesInput) {
   const { app, db, assertCaseExists } = input;
 
+  function requireTemplateCaseAccess(request: FastifyRequest, reply: FastifyReply, caseId: string) {
+    if (!assertCaseExists(caseId, reply)) {
+      return null;
+    }
+    return requireCaseAccess(db, request, reply, caseId);
+  }
+
   app.get("/api/cases/:caseId/document-templates", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
       return;
     }
     const rows = listUserDocumentTemplates(db, caseId);
@@ -44,7 +52,11 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.post("/api/cases/:caseId/document-templates", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
+      return;
+    }
+    const actor = requireWriteActor(request, reply);
+    if (!actor) {
       return;
     }
     const body = request.body as
@@ -69,14 +81,16 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
       description: body?.description,
       body_markdown: bodyMarkdown,
       fields: body?.fields,
-      ai_hints: body?.ai_hints
+      ai_hints: body?.ai_hints,
+      actorLabel: actor.actorLabel,
+      actorUserId: actor.actorUserId
     });
     return { ok: true, case_id: caseId, template: row ? serializeUserDocumentTemplate(row) : null };
   });
 
   app.get("/api/cases/:caseId/document-templates/:templateId", async (request, reply) => {
     const { caseId, templateId } = request.params as { caseId: string; templateId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
       return;
     }
     const row = getUserDocumentTemplate(db, templateId, caseId);
@@ -88,7 +102,11 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.patch("/api/cases/:caseId/document-templates/:templateId", async (request, reply) => {
     const { caseId, templateId } = request.params as { caseId: string; templateId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
+      return;
+    }
+    const actor = requireWriteActor(request, reply);
+    if (!actor) {
       return;
     }
     const body = request.body as
@@ -110,7 +128,9 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
       description: body?.description,
       body_markdown: body?.body_markdown,
       fields: body?.fields,
-      ai_hints: body?.ai_hints
+      ai_hints: body?.ai_hints,
+      actorLabel: actor.actorLabel,
+      actorUserId: actor.actorUserId
     });
     if (!row) {
       return reply.code(404).send({ ok: false, error: "template not found" });
@@ -120,7 +140,10 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.delete("/api/cases/:caseId/document-templates/:templateId", async (request, reply) => {
     const { caseId, templateId } = request.params as { caseId: string; templateId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
+      return;
+    }
+    if (!requireWriteActor(request, reply)) {
       return;
     }
     const deleted = deleteUserDocumentTemplate(db, templateId, caseId);
@@ -132,7 +155,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.post("/api/cases/:caseId/document-templates/:templateId/render", async (request, reply) => {
     const { caseId, templateId } = request.params as { caseId: string; templateId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
       return;
     }
     const template = getUserDocumentTemplate(db, templateId, caseId);
@@ -162,13 +185,19 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
     const { rendered_markdown, missing_placeholders } = renderUserTemplate(bodyToRender, values, fieldsForRender);
     let fill = null;
     if (body?.save) {
+      const actor = requireWriteActor(request, reply);
+      if (!actor) {
+        return;
+      }
       const saved = saveTemplateFill(db, {
         templateId,
         caseId,
         values,
         rendered_markdown,
         source_item_id: body?.source_item_id,
-        status: body?.status ?? undefined
+        status: body?.status ?? undefined,
+        actorLabel: actor.actorLabel,
+        actorUserId: actor.actorUserId
       });
       if (!saved.ok) {
         return reply.code(400).send({ ok: false, error: saved.error });
@@ -187,7 +216,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.get("/api/cases/:caseId/document-template-fills", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
       return;
     }
     const q = request.query as { template_id?: string };
@@ -202,7 +231,7 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.get("/api/cases/:caseId/document-template-fills/:fillId", async (request, reply) => {
     const { caseId, fillId } = request.params as { caseId: string; fillId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
       return;
     }
     const row = getTemplateFill(db, fillId, caseId);
@@ -214,7 +243,11 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.patch("/api/cases/:caseId/document-template-fills/:fillId", async (request, reply) => {
     const { caseId, fillId } = request.params as { caseId: string; fillId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
+      return;
+    }
+    const actor = requireWriteActor(request, reply);
+    if (!actor) {
       return;
     }
     const body = request.body as
@@ -238,7 +271,9 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
       caseId,
       values: body?.values,
       rendered_markdown: body?.rendered_markdown,
-      status: body?.status
+      status: body?.status,
+      actorLabel: actor.actorLabel,
+      actorUserId: actor.actorUserId
     });
     if (!row) {
       return reply.code(404).send({ ok: false, error: "fill not found" });
@@ -248,7 +283,10 @@ export function registerDocumentTemplateRoutes(input: RegisterDocumentTemplateRo
 
   app.delete("/api/cases/:caseId/document-template-fills/:fillId", async (request, reply) => {
     const { caseId, fillId } = request.params as { caseId: string; fillId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireTemplateCaseAccess(request, reply, caseId)) {
+      return;
+    }
+    if (!requireWriteActor(request, reply)) {
       return;
     }
     const deleted = deleteTemplateFill(db, fillId, caseId);

@@ -764,7 +764,7 @@ export function requireCaseAccess(
     if (!membership) {
       void reply.code(403).send({
         ok: false,
-        error: "Forbidden"
+        error: "You do not have access to this matter"
       });
       return null;
     }

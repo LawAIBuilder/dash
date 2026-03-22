@@ -16,6 +16,8 @@
 
 **Related execution queue:** Phase 1 hosted backlog items **HST-01–HST-17** live in [`HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md`](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md). This brief defines *what* must be true; that backlog tracks *ticket-level* work.
 
+**Detailed execution companion:** [`EXECUTION_MULTI_AGENT_CHECKLIST_2026-03-22.md`](./EXECUTION_MULTI_AGENT_CHECKLIST_2026-03-22.md) turns this brief into wave-by-wave checklists and multi-agent handoff rules.
+
 ---
 
 ## Executive decision freeze
@@ -126,12 +128,30 @@ Startup logging now includes the effective SQLite path, export path, and whether
 - **Browser session auth exists now:** the API exposes **`/api/auth/login`**, **`/api/auth/session`**, and **`/api/auth/logout`**, backed by **`users`**, **`auth_sessions`**, and **`case_memberships`** ([`auth.ts`](../apps/api/src/auth.ts), [`auth-routes.ts`](../apps/api/src/routes/auth-routes.ts), [`schema.ts`](../apps/api/src/schema.ts)).
 - **Request principal exists now:** Fastify requests now resolve **`request.user`** from the HTTP-only session cookie when **`WC_SESSION_SECRET`** is configured ([`auth.ts`](../apps/api/src/auth.ts), [`server.ts`](../apps/api/src/server.ts)).
 - **Bootstrap login path exists now:** a first admin can be provisioned from **`WC_BOOTSTRAP_ADMIN_EMAIL`** and **`WC_BOOTSTRAP_ADMIN_PASSWORD`** on startup ([`auth.ts`](../apps/api/src/auth.ts), [`server.ts`](../apps/api/src/server.ts), [`.env.example`](../.env.example)).
-- **Fallback shared bearer still exists:** `VITE_WC_API_KEY` / `WC_API_KEY` remain as transitional fallback and break-glass auth ([`apps/desktop/src/config.ts`](../apps/desktop/src/config.ts), [`server.ts`](../apps/api/src/server.ts)).
+- **Fallback shared bearer still exists:** `WC_API_KEY` remains the server-side transitional fallback and break-glass path, while browser bearer mode is now **explicit opt-in** through `VITE_WC_API_KEY` plus `VITE_WC_ENABLE_API_KEY_FALLBACK` ([`apps/desktop/src/config.ts`](../apps/desktop/src/config.ts), [`server.ts`](../apps/api/src/server.ts)).
 - **Approval attribution is partially real now:** package approval now prefers the authenticated principal, stores **`approved_by_user_id`**, and only accepts **`x-wc-actor`** when the request is using API-key fallback ([`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`ai-service.ts`](../apps/api/src/ai-service.ts), [`schema.ts`](../apps/api/src/schema.ts)).
 - **Case access is partially real now:** the case catalog (`GET /api/cases`, `GET/PATCH /api/cases/:caseId`), package/workbench routes, case-data routes, and exhibit/packet routes now require a **`case_memberships`** row for non-admin session users, while admins still bypass and API-key mode remains an explicit transitional bypass ([`auth.ts`](../apps/api/src/auth.ts), [`case-catalog-routes.ts`](../apps/api/src/routes/case-catalog-routes.ts), [`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`case-data-routes.ts`](../apps/api/src/routes/case-data-routes.ts), [`exhibit-routes.ts`](../apps/api/src/routes/exhibit-routes.ts), [`schema.ts`](../apps/api/src/schema.ts)).
 - **Membership recovery path now exists:** admins can now list, set, delete, and backfill case memberships for older matters, including an operator-facing panel on [`CaseOverviewPage.tsx`](../apps/desktop/src/pages/cases/CaseOverviewPage.tsx) and the underlying case-membership routes in [`case-catalog-routes.ts`](../apps/api/src/routes/case-catalog-routes.ts).
 - **Connector auth is now split explicitly:** tenant-level connector setup and browsing routes are now admin-only for session users, while per-case connector sync/hydrate routes require case membership for non-admin session users; API-key fallback and open-dev mode remain explicit transitional paths, and the PracticePanther OAuth callback stays exempt ([`connectors-routes.ts`](../apps/api/src/routes/connectors-routes.ts), [`auth.ts`](../apps/api/src/auth.ts)).
-- **Package rule actor stamping exists now:** package-rule create/update writes now persist `created_by`, `created_by_user_id`, `updated_by`, and `updated_by_user_id` in the package/workbench slice ([`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`schema.ts`](../apps/api/src/schema.ts)).
+- **Document templates are now inside the case boundary:** document-template routes now enforce the same `case_memberships` check as the other case-scoped route families, and template/fill writes now use explicit write actors ([`document-template-routes.ts`](../apps/api/src/routes/document-template-routes.ts), [`auth.ts`](../apps/api/src/auth.ts)).
+- **Package rule and template actor stamping exist now:** package-rule create/update plus document-template and template-fill create/update writes now persist `created_by`, `created_by_user_id`, `updated_by`, and `updated_by_user_id` in their respective slices ([`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`document-templates.ts`](../apps/api/src/document-templates.ts), [`schema.ts`](../apps/api/src/schema.ts)).
+- **Login throttling now exists:** `POST /api/auth/login` is now fixed-window rate-limited, with env knobs for hosted tuning ([`auth-routes.ts`](../apps/api/src/routes/auth-routes.ts)).
+
+### Recorded Wave 2 route audit (2026-03-22)
+
+The registered case-route families now break down as follows:
+
+| Surface | Session-user rule | Admin override | API-key fallback | Notes |
+| --- | --- | --- | --- | --- |
+| Case catalog | Membership-filtered list, membership required on `GET/PATCH /api/cases/:caseId` | Yes | Explicit transitional bypass | [`case-catalog-routes.ts`](../apps/api/src/routes/case-catalog-routes.ts) |
+| Case data | Membership required | Yes | Explicit transitional bypass | [`case-data-routes.ts`](../apps/api/src/routes/case-data-routes.ts) |
+| Package workbench | Membership required; approval route has stricter role floor | Yes | Explicit transitional bypass; approval requires `x-wc-actor` | [`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts) |
+| Document templates | Membership required; mutating routes require a write actor | Yes | Explicit transitional bypass; writes require `x-wc-actor` | [`document-template-routes.ts`](../apps/api/src/routes/document-template-routes.ts) |
+| Exhibits | Membership required across packet, preview, finalize, export, and exhibit-list routes | Yes | Explicit transitional bypass | [`exhibit-routes.ts`](../apps/api/src/routes/exhibit-routes.ts) |
+| Per-case connectors | Membership required on case-scoped sync/hydrate actions | Yes | Explicit transitional bypass | [`connectors-routes.ts`](../apps/api/src/routes/connectors-routes.ts) |
+| Tenant connector admin | Session user must be admin | N/A | Explicit transitional bypass | [`connectors-routes.ts`](../apps/api/src/routes/connectors-routes.ts) |
+
+Intentional exceptions remain limited to OAuth callbacks, dev-only routes, and non-case-scoped ops/admin surfaces.
 
 ### Target architecture (remaining after the first slice)
 
@@ -148,16 +168,16 @@ The repo now has the first real principal slice. The remaining auth work is to e
 | `case_memberships` (or equivalent) | Case-scoped read/write/run/approve |
 | Actor columns | `created_by`, `updated_by`, `approved_by`, optional `acted_as_role` on state-changing records |
 
-**Current status:** `approved_by_user_id` on `package_runs` plus actor stamping on `package_rules` are implemented; broader actor stamping remains open.
+**Current status:** `approved_by_user_id` on `package_runs` plus actor stamping on `package_rules`, document templates, and template fills are implemented; broader actor stamping remains open.
 
 ### Migration sequence (locked)
 
 | Phase | Content |
 | --- | --- |
 | **A** | Principal middleware; session login; keep **`WC_API_KEY`** / browser bearer only as **break-glass** or dev fallback. Stop preferring `x-wc-actor` when `request.user` exists. **Implemented for the first vertical slice.** |
-| **B** | Actor stamping on all state-changing writes (approvals, package rules, uploads, connector actions, templates, exports). **Partially implemented**: package run approvals and package-rule create/update now stamp authenticated principals or explicit fallback actors. |
-| **C** | Route guards: case read/write, package run/approve, connector manage, ops/admin. **Partially implemented**: the case catalog, package/workbench routes, case-data routes, and exhibit/packet routes now enforce `case_memberships` for non-admin session users with admin override and API-key transitional bypass; connector routes now split between admin-only tenant-level actions and case-membership-gated per-case sync/hydrate actions; admins now have a real membership-management/backfill path for legacy matters. |
-| **D** | Remove **`VITE_WC_API_KEY`** from normal hosted usage; retain server **`WC_API_KEY`** only for M2M or break-glass if absolutely required. |
+| **B** | Actor stamping on all state-changing writes (approvals, package rules, uploads, connector actions, templates, exports). **Partially implemented**: package run approvals, package-rule create/update, and document-template/template-fill create/update now stamp authenticated principals or explicit fallback actors. |
+| **C** | Route guards: case read/write, package run/approve, connector manage, ops/admin. **Largely implemented for the registered case-route families**: the case catalog, package/workbench routes, case-data routes, exhibit/packet routes, and document-template routes now enforce `case_memberships` for non-admin session users with admin override and API-key transitional bypass; connector routes now split between admin-only tenant-level actions and case-membership-gated per-case sync/hydrate actions; admins now have a real membership-management/backfill path for legacy matters. |
+| **D** | Remove **`VITE_WC_API_KEY`** from normal hosted usage; retain server **`WC_API_KEY`** only for M2M or break-glass if absolutely required. **Partially implemented**: browser bearer mode is now explicit opt-in instead of implicit whenever `VITE_WC_API_KEY` is present. |
 
 ---
 

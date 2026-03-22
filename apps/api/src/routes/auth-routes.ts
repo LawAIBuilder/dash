@@ -10,6 +10,8 @@ import {
   listUsers,
   revokeSessionByToken
 } from "../auth.js";
+import { readPositiveIntegerEnv } from "../env.js";
+import { createFixedWindowRateLimiter } from "../rate-limit.js";
 
 export interface RegisterAuthRoutesInput {
   app: FastifyInstance;
@@ -19,6 +21,16 @@ export interface RegisterAuthRoutesInput {
 
 export function registerAuthRoutes(input: RegisterAuthRoutesInput) {
   const { app, db, apiKeyFallbackEnabled } = input;
+  const loginRateLimiter = createFixedWindowRateLimiter({
+    max: readPositiveIntegerEnv("WC_AUTH_LOGIN_RATE_LIMIT_MAX", 8, {
+      min: 1,
+      max: 100
+    }),
+    windowMs: readPositiveIntegerEnv("WC_AUTH_LOGIN_RATE_LIMIT_WINDOW_MS", 5 * 60_000, {
+      min: 1_000,
+      max: 60 * 60_000
+    })
+  });
 
   app.get("/api/auth/session", async (request) => {
     const summary = getAuthSessionSummary(db, apiKeyFallbackEnabled);
@@ -53,6 +65,18 @@ export function registerAuthRoutes(input: RegisterAuthRoutesInput) {
       return reply.code(400).send({
         ok: false,
         error: "email and password are required"
+      });
+    }
+
+    const rateLimitKey = `${request.ip}:${body.email.trim().toLowerCase()}`;
+    const rateLimit = loginRateLimiter.check(rateLimitKey);
+    reply.header("x-rate-limit-limit", rateLimit.limit);
+    reply.header("x-rate-limit-remaining", rateLimit.remaining);
+    if (!rateLimit.allowed) {
+      reply.header("retry-after", rateLimit.retryAfterSeconds);
+      return reply.code(429).send({
+        ok: false,
+        error: "Too many login attempts. Please retry shortly."
       });
     }
 
@@ -108,4 +132,3 @@ export function registerAuthRoutes(input: RegisterAuthRoutesInput) {
     };
   });
 }
-

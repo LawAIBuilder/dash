@@ -171,5 +171,63 @@ describe("auth routes", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
-});
 
+  it("rate limits repeated login attempts", async () => {
+    const root = createTempRoot("wc-auth-rate-limit-");
+    const dbDir = join(root, "persistent");
+    mkdirSync(dbDir, { recursive: true });
+
+    const server = await loadServerWithEnv(root, {
+      WC_SQLITE_PATH: join(dbDir, "authoritative.sqlite"),
+      WC_SESSION_SECRET: "test-session-secret",
+      WC_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com",
+      WC_BOOTSTRAP_ADMIN_PASSWORD: "test-password-123",
+      WC_BOOTSTRAP_ADMIN_NAME: "Test Admin",
+      WC_AUTH_LOGIN_RATE_LIMIT_MAX: "2",
+      WC_AUTH_LOGIN_RATE_LIMIT_WINDOW_MS: "60000"
+    });
+
+    try {
+      const first = await server.app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          email: "admin@example.com",
+          password: "wrong-password"
+        }
+      });
+      expect(first.statusCode).toBe(401);
+
+      const second = await server.app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          email: "admin@example.com",
+          password: "wrong-password"
+        }
+      });
+      expect(second.statusCode).toBe(401);
+
+      const limited = await server.app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          email: "admin@example.com",
+          password: "wrong-password"
+        }
+      });
+      expect(limited.statusCode).toBe(429);
+      expect(limited.json()).toEqual(
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringMatching(/too many login attempts/i)
+        })
+      );
+      expect(Number(limited.headers["x-rate-limit-limit"])).toBe(2);
+      expect(limited.headers["retry-after"]).toBeTruthy();
+    } finally {
+      await server.cleanup();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

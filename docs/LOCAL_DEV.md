@@ -62,13 +62,15 @@ If you are intentionally using shared browser bearer fallback, also set:
 
 ```bash
 VITE_WC_API_KEY=your-local-api-key
+VITE_WC_ENABLE_API_KEY_FALLBACK=1
 ```
 
 If you are using browser session auth locally:
 
 - Do **not** set `VITE_WC_API_KEY`.
+- Do **not** set `VITE_WC_ENABLE_API_KEY_FALLBACK`.
 - Use the server bootstrap admin env (`WC_BOOTSTRAP_ADMIN_EMAIL`, `WC_BOOTSTRAP_ADMIN_PASSWORD`) and sign in through the browser.
-- For the current Wave 2 authorization slice, create matters while signed in if you want a non-admin session user to see that matter in the catalog and have package/workbench, case-data, and exhibit/packet access immediately; case creation now seeds the creator's `case_memberships` row. Older cases can be backfilled from the admin case-access panel on the overview page.
+- For the current Wave 2 authorization slice, create matters while signed in if you want a non-admin session user to see that matter in the catalog and have package/workbench, case-data, exhibit/packet, and document-template access immediately; case creation now seeds the creator's `case_memberships` row. Older cases can be backfilled from the admin case-access panel on the overview page.
 - Connector setup is stricter than matter work: tenant-level connector routes now require an admin session, while per-case sync/hydrate actions require case membership for non-admin session users.
 - Keep the hostnames aligned. A common local pairing is:
   - desktop on `http://localhost:5173`
@@ -150,10 +152,13 @@ Check:
   - `WC_SESSION_SECRET`
   - `WC_BOOTSTRAP_ADMIN_EMAIL`
   - `WC_BOOTSTRAP_ADMIN_PASSWORD`
+  - `WC_AUTH_LOGIN_RATE_LIMIT_MAX`
+  - `WC_AUTH_LOGIN_RATE_LIMIT_WINDOW_MS`
   - matching hostnames between `VITE_API_BASE_URL` and the browser origin
 - If using shared bearer fallback:
   - `WC_API_KEY` on the API
   - `VITE_WC_API_KEY` in the desktop env
+  - `VITE_WC_ENABLE_API_KEY_FALLBACK=1` in the desktop env
 
 ### Remote API in a container
 
@@ -171,3 +176,4 @@ and point `VITE_API_BASE_URL` at the public origin.
 - [DEPLOY.md](./DEPLOY.md) — includes **Phase 1 hosted internal web** execution checklist
 - [HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md)
 - [HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md)
+- [EXECUTION_MULTI_AGENT_CHECKLIST_2026-03-22.md](./EXECUTION_MULTI_AGENT_CHECKLIST_2026-03-22.md)

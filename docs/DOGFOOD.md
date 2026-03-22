@@ -58,7 +58,12 @@ Optional: **`POST /api/connectors/box/auth/jwt`** once to probe JWT and refresh 
 
 On a **host or VM**, run the worker in a second terminal or as a second systemd service (see [DEPLOY.md](./DEPLOY.md)). In **Docker**, use a second container that shares the SQLite volume and env file.
 
-If **`WC_API_KEY`** is set on the API, set **`VITE_WC_API_KEY`** in the desktop env to the same value so `Authorization: Bearer …` is sent on every request.
+If you are intentionally using shared browser bearer fallback against an API with **`WC_API_KEY`** set, also set:
+
+- **`VITE_WC_API_KEY`** to the same value
+- **`VITE_WC_ENABLE_API_KEY_FALLBACK=1`**
+
+For normal hosted session auth, leave both browser fallback vars unset.
 
 For a **remote API**, set **`VITE_API_BASE_URL`** to the public origin and ensure **`WC_CORS_ORIGIN`** on the server includes your desktop origin. Remote APIs typically use **`WC_API_HOST=0.0.0.0`** and a persistent **`WC_SQLITE_PATH`** on a volume.
 
