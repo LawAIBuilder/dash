@@ -2,6 +2,10 @@
   "name": "wc-legal-prep",
   "private": true,
   "version": "0.1.0",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22 <23"
+  },
   "workspaces": [
     "apps/*",
     "packages/*"
@@ -13,7 +17,8 @@
     "dev": "npm run dev --workspace @wc/api",
     "dev:desktop": "npm run dev --workspace @wc/desktop",
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run build --workspace @wc/domain-core && npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run build --workspace @wc/domain-core && npm run typecheck --workspaces --if-present",
+    "ci:local": "npm test && npm run typecheck && npm run build"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
