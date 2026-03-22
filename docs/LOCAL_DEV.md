@@ -65,6 +65,8 @@ VITE_WC_API_KEY=your-local-api-key
 VITE_WC_ENABLE_API_KEY_FALLBACK=1
 ```
 
+That browser fallback path only makes sense when the API is intentionally running without `WC_SESSION_SECRET`. If the API enables browser sessions, the desktop shell expects login and does not use shared bearer mode as the normal hosted path.
+
 If you are using browser session auth locally:
 
 - Do **not** set `VITE_WC_API_KEY`.
@@ -159,6 +161,7 @@ Check:
   - `WC_API_KEY` on the API
   - `VITE_WC_API_KEY` in the desktop env
   - `VITE_WC_ENABLE_API_KEY_FALLBACK=1` in the desktop env
+  - if the API is intentionally running without `WC_SESSION_SECRET`, otherwise the shell will stay on the login path
 
 ### Remote API in a container
 

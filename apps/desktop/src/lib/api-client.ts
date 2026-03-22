@@ -1154,6 +1154,11 @@ export interface PackageRule {
 export interface PackageRun {
   id: string;
   packet_id: string;
+  blueprint_version_id: string | null;
+  blueprint_version: string | null;
+  blueprint_key: string | null;
+  blueprint_name: string | null;
+  blueprint_execution_engine: string | null;
   status: string;
   approval_status: string | null;
   approved_at: string | null;

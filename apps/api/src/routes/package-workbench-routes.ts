@@ -470,16 +470,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
     const { caseId, runId } = request.params as { caseId: string; runId: string };
     if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
-    const row = db
-      .prepare(
-        `
-          SELECT pr.*, ep.case_id
-          FROM package_runs pr
-          JOIN exhibit_packets ep ON ep.id = pr.packet_id
-          WHERE pr.id = ?
-        `
-      )
-      .get(runId) as Record<string, unknown> | undefined;
+    const row = getPackageRun(db, runId) as Record<string, unknown> | null;
     if (!row) {
       return reply.code(404).send({ ok: false, error: "run not found" });
     }

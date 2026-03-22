@@ -69,19 +69,19 @@ export function registerAuthRoutes(input: RegisterAuthRoutesInput) {
     }
 
     const rateLimitKey = `${request.ip}:${body.email.trim().toLowerCase()}`;
-    const rateLimit = loginRateLimiter.check(rateLimitKey);
-    reply.header("x-rate-limit-limit", rateLimit.limit);
-    reply.header("x-rate-limit-remaining", rateLimit.remaining);
-    if (!rateLimit.allowed) {
-      reply.header("retry-after", rateLimit.retryAfterSeconds);
-      return reply.code(429).send({
-        ok: false,
-        error: "Too many login attempts. Please retry shortly."
-      });
-    }
-
     const user = authenticateUser(db, body.email, body.password);
     if (!user) {
+      const rateLimit = loginRateLimiter.check(rateLimitKey);
+      reply.header("x-rate-limit-limit", rateLimit.limit);
+      reply.header("x-rate-limit-remaining", rateLimit.remaining);
+      if (!rateLimit.allowed) {
+        reply.header("retry-after", rateLimit.retryAfterSeconds);
+        return reply.code(429).send({
+          ok: false,
+          error: "Too many login attempts. Please retry shortly."
+        });
+      }
+
       return reply.code(401).send({
         ok: false,
         error: "Invalid email or password"

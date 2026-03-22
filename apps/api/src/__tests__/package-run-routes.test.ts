@@ -222,6 +222,82 @@ describe("package run routes", () => {
     );
   });
 
+  it("returns blueprint metadata on packets and package runs", async () => {
+    const caseId = await createCase("Blueprint Surface Matter");
+
+    const packetRes = await app.inject({
+      method: "POST",
+      url: `/api/cases/${caseId}/exhibit-packets`,
+      headers: sessionHeaders(),
+      payload: { packet_name: "Blueprint Packet", package_type: "claim_petition" }
+    });
+    expect(packetRes.statusCode).toBe(200);
+    const packet = packetRes.json<{
+      packet: {
+        id: string;
+        blueprint_version_id: string | null;
+        blueprint_version: string | null;
+        blueprint_key: string | null;
+        blueprint_name: string | null;
+        blueprint_execution_engine: string | null;
+      };
+    }>().packet;
+    expect(packet.blueprint_version_id).toBeTruthy();
+    expect(packet.blueprint_key).toBe("claim_petition_default");
+    expect(packet.blueprint_version).toBe("v1");
+    expect(packet.blueprint_name).toBe("Claim Petition");
+    expect(packet.blueprint_execution_engine).toBe("package_worker");
+
+    const runRes = await app.inject({
+      method: "POST",
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/package-runs`,
+      headers: sessionHeaders()
+    });
+    expect(runRes.statusCode).toBe(200);
+    const run = runRes.json<{
+      run: {
+        id: string;
+        status: string;
+        error_code: string | null;
+        blueprint_version_id: string | null;
+        blueprint_version: string | null;
+        blueprint_key: string | null;
+        blueprint_name: string | null;
+        blueprint_execution_engine: string | null;
+      };
+    }>().run;
+    expect(run.status).toBe("failed");
+    expect(run.error_code).toBe("missing_api_key");
+    expect(run.blueprint_version_id).toBe(packet.blueprint_version_id);
+    expect(run.blueprint_key).toBe("claim_petition_default");
+    expect(run.blueprint_version).toBe("v1");
+    expect(run.blueprint_name).toBe("Claim Petition");
+    expect(run.blueprint_execution_engine).toBe("package_worker");
+
+    const listRes = await app.inject({
+      method: "GET",
+      url: `/api/cases/${caseId}/exhibit-packets/${packet.id}/package-runs`,
+      headers: sessionHeaders()
+    });
+    expect(listRes.statusCode).toBe(200);
+    const listedRun = listRes.json<{
+      runs: Array<{
+        id: string;
+        blueprint_version_id: string | null;
+        blueprint_version: string | null;
+        blueprint_key: string | null;
+      }>;
+    }>().runs[0];
+    expect(listedRun).toEqual(
+      expect.objectContaining({
+        id: run.id,
+        blueprint_version_id: packet.blueprint_version_id,
+        blueprint_version: "v1",
+        blueprint_key: "claim_petition_default"
+      })
+    );
+  });
+
   it("returns historical flow and recommendation routes", async () => {
     const caseId = await createCase("Historical Flow Matter");
 

@@ -10,11 +10,12 @@ Use it when multiple agents or sessions are contributing in parallel. The founda
 - Wave 1 is not fully proven until hosted-style restore evidence, named ownership, and HST reconciliation are recorded in repo docs.
 - Wave 2 is materially implemented: session auth, `request.user`, `case_memberships`, and route-family gating now cover case catalog, case-data, workbench, connectors, exhibits, and document templates.
 - Exhibit routes are already membership-gated on `main`; treat any “exhibit bypass” concern as closed unless a specific handler and commit are cited.
-- Wave 2 trust-boundary closure is now in place for the registered case-route families; the remaining Wave 2 cleanup is to keep actor stamping broad enough for meaningful auditability and keep hosted browser auth session-first by default.
+- Wave 2 trust-boundary closure is now in place for the registered case-route families; the remaining Wave 2 follow-on is to keep actor stamping broad enough for meaningful auditability, not to reopen the boundary itself.
 - CI already enforces build, test, and typecheck on push and PR in [ci.yml](../.github/workflows/ci.yml). The remaining gaps are operational proof and trust-boundary closure, not missing automation.
 - The current case-route audit surface is finite: [server.ts](../apps/api/src/server.ts) registers the route families that matter for Wave 2 closure.
 - The old Cursor roadmap and [ROADMAP.md](./ROADMAP.md) are stale for sequencing. Use the foundation brief, [DEPLOY.md](./DEPLOY.md), and [HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md).
 - The first blueprint runtime round is limited to `hearing_packet`, `claim_petition`, and `discovery_response`. Demand and `239` remain important spec/golden references but are not first-round runtime package-worker targets.
+- Wave 3 has now started on `main`: blueprint families and versions exist in schema/seed, packets and package runs bind `blueprint_version_id`, the package worker resolves prompt/model/retrieval settings from blueprints, and the package UI surfaces blueprint name/version metadata.
 
 ## Non-Negotiable Rules
 
@@ -120,8 +121,10 @@ Intentional exceptions:
   - `package_rules`
 - Move prompt branches from [ai-service.ts](../apps/api/src/ai-service.ts) into blueprint prompt contracts.
 - Move retrieval behavior from [retrieval.ts](../apps/api/src/retrieval.ts) into blueprint retrieval profiles.
+- Treat retrieval profiles as real controls: max chars, target-document prepending, and bundle-section inclusion flags should all be driven by the bound blueprint version instead of package-type branching.
 - Keep `package_rules` as case-level overrides.
 - Expose blueprint version in operator-visible run surfaces, not only the DB.
+- Prefer packet/run inspection surfaces first; do not build a blueprint-admin CMS before the runtime contract is stable.
 - Tie blueprint-backed package runs to package-studio goldens and assertion-based tests.
 
 ### Wave 3 Exit Gate
@@ -240,5 +243,8 @@ Intentional exceptions:
 ## Immediate Next Slice
 
 - Close the remaining Wave 1 hosted-ops proof: execute and record a hosted-style non-prod restore drill, retention policy, and named owners if they are not already reconciled.
-- If staying in auth/governance before Wave 3, expand actor stamping to the next highest-signal write surfaces such as uploads, connector actions, case edits, and exports.
-- Only begin Wave 3 blueprint work after the session-first hosted path and current audit trail are considered good enough for internal trust.
+- Continue Wave 3 by tightening the first runtime contract:
+  - document historical-run backfill policy for `blueprint_version_id`
+  - extend package-studio / runtime assertions around the first three blueprint-backed package types
+  - widen operator-visible blueprint metadata where needed without introducing a blueprint-admin UI
+- If auth/governance work reopens before Wave 4, prioritize actor stamping on uploads, connector actions, case edits, and exports rather than more boundary scaffolding.

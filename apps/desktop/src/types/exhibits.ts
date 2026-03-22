@@ -67,6 +67,11 @@ export interface ExhibitPacket {
   package_type?: string;
   package_label?: string | null;
   target_document_source_item_id?: string | null;
+  blueprint_version_id?: string | null;
+  blueprint_version?: string | null;
+  blueprint_key?: string | null;
+  blueprint_name?: string | null;
+  blueprint_execution_engine?: string | null;
   run_status?: string | null;
   created_at: string;
   updated_at: string;

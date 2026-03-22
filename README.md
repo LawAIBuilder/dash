@@ -5,6 +5,7 @@ Monorepo for a **workers’ comp hearing-prep / matter-intelligence** stack: aut
 ## Documentation
 
 - **[docs/FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](docs/FOUNDATION_EXECUTION_BRIEF_2026-03-21.md)** — **Authoritative execution packet** for implementers: hosted readiness, auth migration, blueprint model, matter operating console, legacy AI freeze; ordered waves 0–6.
+- **[docs/EXECUTION_MULTI_AGENT_CHECKLIST_2026-03-22.md](docs/EXECUTION_MULTI_AGENT_CHECKLIST_2026-03-22.md)** — Wave-by-wave execution checklist, handoff rules, and multi-agent session protocol.
 - **[docs/ROADMAP.md](docs/ROADMAP.md)** — Architecture, code map, test surface, milestones (M1–M3), phased roadmap, non-goals.
 - **[docs/DOGFOOD.md](docs/DOGFOOD.md)** — Operator runbook: env, start servers, case + Box folder, desktop Sync / Normalize / OCR queue.
 - **[docs/DEPLOY.md](docs/DEPLOY.md)** — Deploy notes: SQLite volume, API + OCR worker processes, `WC_API_HOST`, CORS, API key.

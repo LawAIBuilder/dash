@@ -64,6 +64,7 @@ If you are intentionally using shared browser bearer fallback against an API wit
 - **`VITE_WC_ENABLE_API_KEY_FALLBACK=1`**
 
 For normal hosted session auth, leave both browser fallback vars unset.
+If the API is running with **`WC_SESSION_SECRET`**, the shell expects a real login and shared bearer fallback is not the normal browser path.
 
 For a **remote API**, set **`VITE_API_BASE_URL`** to the public origin and ensure **`WC_CORS_ORIGIN`** on the server includes your desktop origin. Remote APIs typically use **`WC_API_HOST=0.0.0.0`** and a persistent **`WC_SQLITE_PATH`** on a volume.
 

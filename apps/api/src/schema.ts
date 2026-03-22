@@ -1297,5 +1297,68 @@ export const authoritativeMigrations: AuthoritativeMigration[] = [
         CREATE INDEX IF NOT EXISTS idx_user_document_template_fills_updated_by_user ON user_document_template_fills(updated_by_user_id);
       `);
     }
+  },
+  {
+    id: "0026_blueprints_and_run_binding",
+    description: "Blueprint families, versioned package contracts, and blueprint binding on packets and package runs",
+    up(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS blueprints (
+          id TEXT PRIMARY KEY,
+          blueprint_key TEXT NOT NULL UNIQUE,
+          package_type TEXT NOT NULL UNIQUE,
+          name TEXT NOT NULL,
+          description TEXT,
+          execution_engine TEXT NOT NULL DEFAULT 'package_worker',
+          product_preset_id TEXT REFERENCES product_presets(id) ON DELETE SET NULL,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_blueprints_package_type ON blueprints(package_type);
+      `);
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS blueprint_versions (
+          id TEXT PRIMARY KEY,
+          blueprint_id TEXT NOT NULL REFERENCES blueprints(id) ON DELETE CASCADE,
+          version TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'draft',
+          default_model TEXT,
+          prompt_contract_json TEXT NOT NULL,
+          retrieval_profile_json TEXT NOT NULL,
+          output_contract_json TEXT NOT NULL,
+          provenance_policy_json TEXT NOT NULL,
+          evaluation_policy_json TEXT NOT NULL,
+          linked_rulepack_version TEXT,
+          linked_workflow_states_json TEXT,
+          linked_approval_gates_json TEXT,
+          linked_artifact_templates_json TEXT,
+          created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(blueprint_id, version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_blueprint_versions_blueprint ON blueprint_versions(blueprint_id, status, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_blueprint_versions_active
+          ON blueprint_versions(blueprint_id)
+          WHERE status = 'active';
+      `);
+
+      addColumnIfMissing(
+        db,
+        "exhibit_packets",
+        "blueprint_version_id",
+        "blueprint_version_id TEXT REFERENCES blueprint_versions(id) ON DELETE SET NULL"
+      );
+      addColumnIfMissing(
+        db,
+        "package_runs",
+        "blueprint_version_id",
+        "blueprint_version_id TEXT REFERENCES blueprint_versions(id) ON DELETE SET NULL"
+      );
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_exhibit_packets_blueprint_version ON exhibit_packets(blueprint_version_id);
+        CREATE INDEX IF NOT EXISTS idx_package_runs_blueprint_version ON package_runs(blueprint_version_id);
+      `);
+    }
   }
 ];

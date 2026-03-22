@@ -53,7 +53,7 @@ This file turns “Phase 1 hosted internal web” into **trackable work**. IDs a
 | ID | Title | Acceptance |
 |----|--------|------------|
 | **HST-16** | **Source capability matrix** | Single doc: upload vs Box vs PP for preview, OCR, export, assembly—aligned with [INTELLIGENCE_SPINE_AND_CORPUS_VISION_2026-03-21.md](./INTELLIGENCE_SPINE_AND_CORPUS_VISION_2026-03-21.md) and audit docs. |
-| **HST-17** | **Shared-key risk documented** | Operators acknowledge `VITE_WC_API_KEY` is public; path to real auth tracked as Phase 2. |
+| **HST-17** | **Shared-key risk documented** | Operators acknowledge `VITE_WC_API_KEY` is public; browser session auth is now shipped, and shared browser bearer remains a transitional / opt-in fallback rather than the normal hosted path. |
 
 ---
 

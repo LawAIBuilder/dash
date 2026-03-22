@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, NavLink, Outlet, useParams } from "react-router-dom";
 import {
   Bot,
+  TriangleAlert,
   FileText,
   FolderOpen,
   Home,
@@ -48,9 +49,11 @@ export function AppShell() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const sessionEnabled = authSession.data?.session_enabled ?? false;
+  const serverApiKeyFallbackEnabled = authSession.data?.api_key_fallback_enabled ?? false;
   const browserApiKeyMode = hasBrowserApiKeyAuth();
+  const browserApiKeyFallbackRequired = !sessionEnabled && serverApiKeyFallbackEnabled && !browserApiKeyMode;
   const requiresLogin = sessionEnabled && !authSession.data?.authenticated;
-  const canLoadWorkspace = !authSession.isLoading && !authSession.error && !requiresLogin;
+  const canLoadWorkspace = !authSession.isLoading && !authSession.error && !requiresLogin && !browserApiKeyFallbackRequired;
   const { projection, refresh, isFetching } = useProjection(caseId, { enabled: canLoadWorkspace });
   const matterName = projection?.slices.case_header?.name ?? "Matter";
 
@@ -81,6 +84,38 @@ export function AppShell() {
             <p className="text-sm text-muted-foreground">
               {getDisplayErrorMessage(authSession.error, "Could not determine workspace auth state.")}
             </p>
+            <Button variant="outline" onClick={() => void authSession.refetch()}>
+              Retry
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (browserApiKeyFallbackRequired) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[var(--workbench-paper)] p-6">
+        <Card className="w-full max-w-md border-border/70 bg-card/95 shadow-lg">
+          <CardHeader className="space-y-2">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <TriangleAlert className="size-4" />
+              Browser API-key fallback is not configured
+            </div>
+            <CardTitle className="text-2xl tracking-tight">Workspace access is blocked</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              This API is running without browser session auth, so the desktop app needs shared-key browser fallback
+              to reach the workspace. Set `VITE_WC_API_KEY` and `VITE_WC_ENABLE_API_KEY_FALLBACK=1` in the desktop
+              build, or enable `WC_SESSION_SECRET` on the API server.
+            </p>
+            {serverApiKeyFallbackEnabled ? (
+              <div className="rounded-lg border border-amber-300/70 bg-amber-50 p-3 text-sm text-amber-900">
+                The API reports shared-key fallback is available, but this desktop build is not forwarding a browser
+                API key.
+              </div>
+            ) : null}
             <Button variant="outline" onClick={() => void authSession.refetch()}>
               Retry
             </Button>
@@ -154,7 +189,7 @@ export function AppShell() {
                 Sign in
               </Button>
             </form>
-            {browserApiKeyMode ? (
+            {browserApiKeyMode && serverApiKeyFallbackEnabled ? (
               <div className="text-xs text-muted-foreground">
                 Browser API-key mode is still configured locally, but this server requires session login for normal
                 hosted use.
@@ -290,7 +325,7 @@ export function AppShell() {
                       {logout.isPending ? <Loader2 className="size-4 animate-spin" /> : <LogOut className="size-4" />}
                     </Button>
                   </div>
-                ) : browserApiKeyMode ? (
+                ) : browserApiKeyMode && serverApiKeyFallbackEnabled ? (
                   <Badge variant="outline">Shared API key mode</Badge>
                 ) : null}
               </div>

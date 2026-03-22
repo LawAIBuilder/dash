@@ -1,6 +1,6 @@
 # Deploying the authoritative API + OCR worker
 
-The stack is **Node + SQLite (WAL)**. The HTTP API and the OCR worker are **separate processes** that must share the **same database file** and **compatible environment** (Box JWT, browser-session auth or fallback API key, and the same writable artifact paths).
+The stack is **Node + SQLite (WAL)**. The HTTP API and the OCR worker are **separate processes** that must share the **same database file** and **compatible environment** (Box JWT, browser-session auth or, when session auth is intentionally disabled for browser use, fallback API key, plus the same writable artifact paths).
 
 ## Primary product mode (hosted internal web)
 
@@ -43,8 +43,10 @@ Without the worker, **Queue OCR** only enqueues rows; text is not produced until
 - **Current Wave 2 authorization slice:** non-admin session users now need a **`case_memberships`** row for case access across the case catalog (`GET /api/cases`, `GET/PATCH /api/cases/:caseId`), package/workbench routes, case-data routes, exhibit/packet routes, and document-template routes; cases created through session auth automatically seed membership for the creator.
 - **Current recovery path for older cases:** admins can now manage case memberships and run a per-case backfill for active users from the matter overview or the case-membership API routes. That fixes legacy cases that predate membership seeding without raw SQL.
 - **Shared bearer fallback:** **`WC_API_KEY`** remains available for break-glass, machine-to-machine, and transitional internal use. It is no longer the preferred normal browser path.
-- **Browser bundle fallback:** only set **`VITE_WC_API_KEY`** if you are intentionally still using shared browser bearer mode, and pair it with **`VITE_WC_ENABLE_API_KEY_FALLBACK=1`**. It is **not** required when hosted browser login is enabled.
-- **Login hardening:** `POST /api/auth/login` now uses a fixed-window rate limit. Tune it with **`WC_AUTH_LOGIN_RATE_LIMIT_MAX`** and **`WC_AUTH_LOGIN_RATE_LIMIT_WINDOW_MS`** if hosted traffic patterns require it.
+- **Browser bundle fallback:** only set **`VITE_WC_API_KEY`** if you are intentionally still using shared browser bearer mode, and pair it with **`VITE_WC_ENABLE_API_KEY_FALLBACK=1`**. It is **not** required when hosted browser login is enabled, and it is not the normal browser path when `WC_SESSION_SECRET` is present.
+- **Mixed-mode caveat:** if the API runs with browser session auth enabled, the desktop shell expects a real login and does not treat browser bearer fallback as a substitute for that login flow. Browser bearer fallback is only the primary browser path when the API is intentionally running without `WC_SESSION_SECRET`.
+- **API-key-only browser mode:** if the API exposes only `WC_API_KEY` and not browser session auth, the desktop build must include both **`VITE_WC_API_KEY`** and **`VITE_WC_ENABLE_API_KEY_FALLBACK=1`** or the shell will block workspace access instead of making silent unauthenticated requests.
+- **Login hardening:** `POST /api/auth/login` now uses a fixed-window rate limit on failed credential attempts. Tune it with **`WC_AUTH_LOGIN_RATE_LIMIT_MAX`** and **`WC_AUTH_LOGIN_RATE_LIMIT_WINDOW_MS`** if hosted traffic patterns require it.
 - This repo now supports both modes, but the shared-key browser model is still **transitional hosted auth**, not the final security model. See [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md).
 
 ### Current connector auth split

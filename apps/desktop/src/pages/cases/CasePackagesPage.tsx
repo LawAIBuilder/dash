@@ -231,6 +231,11 @@ export function CasePackagesPage() {
                     <div className="font-medium">{p.packet_name}</div>
                     <div className="text-muted-foreground flex flex-wrap gap-2 text-xs">
                       <Badge variant="secondary">{formatLabel(p.package_type ?? "hearing_packet")}</Badge>
+                      {p.blueprint_name ? (
+                        <Badge variant="outline">
+                          {p.blueprint_name} {p.blueprint_version ? `• ${p.blueprint_version}` : ""}
+                        </Badge>
+                      ) : null}
                       {p.run_status ? <span>Run: {p.run_status}</span> : null}
                     </div>
                   </div>
@@ -266,10 +271,25 @@ export function CasePackagesPage() {
             </p>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid gap-2 md:grid-cols-[260px_minmax(0,1fr)_auto]">
+            <div className="grid gap-2 md:grid-cols-[220px_220px_minmax(0,1fr)_auto]">
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Package type</div>
                 <Badge variant="secondary">{formatLabel(activePacket.package_type ?? "hearing_packet")}</Badge>
+              </div>
+              <div className="space-y-1">
+                <div className="text-xs text-muted-foreground">Blueprint contract</div>
+                {activePacket.blueprint_name ? (
+                  <div className="flex flex-wrap gap-2">
+                    <Badge variant="outline">
+                      {activePacket.blueprint_name} {activePacket.blueprint_version ? `• ${activePacket.blueprint_version}` : ""}
+                    </Badge>
+                    {activePacket.blueprint_execution_engine ? (
+                      <Badge variant="secondary">{formatLabel(activePacket.blueprint_execution_engine)}</Badge>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">No blueprint bound</div>
+                )}
               </div>
               <div className="space-y-1">
                 <div className="text-xs text-muted-foreground">Target document</div>
@@ -518,6 +538,11 @@ export function CasePackagesPage() {
                         <Badge variant={run.approval_status === "approved" ? "default" : "secondary"}>
                           {formatLabel(run.approval_status ?? "pending")}
                         </Badge>{" "}
+                        {run.blueprint_name ? (
+                          <Badge variant="outline">
+                            {run.blueprint_name} {run.blueprint_version ? `• ${run.blueprint_version}` : ""}
+                          </Badge>
+                        ) : null}{" "}
                         <span className="text-muted-foreground text-xs">{run.model ?? ""}</span>
                         {run.prompt_tokens != null ? (
                           <span className="text-muted-foreground ml-2 text-xs">

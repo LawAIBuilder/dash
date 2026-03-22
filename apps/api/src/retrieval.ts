@@ -386,11 +386,25 @@ export interface BuildPackageBundleInput {
   /** Page ranges per source item for chunk mode */
   chunkRequests?: Array<{ sourceItemId: string; pageStart: number; pageEnd: number }>;
   maxChars?: number;
+  includeCaseSummary?: boolean;
+  includeDocumentSummaries?: boolean;
+  includeFullDocuments?: boolean;
+  includeChunks?: boolean;
+  includePpContext?: boolean;
+  includePackageRules?: boolean;
+  includeGoldenExample?: boolean;
 }
 
 export function buildPackageBundle(db: Database.Database, input: BuildPackageBundleInput): PackageBundlePayload {
   const warnings: RetrievalWarning[] = [];
   const maxChars = input.maxChars ?? DEFAULT_MAX_RETRIEVAL_CHARS;
+  const includeCaseSummary = input.includeCaseSummary !== false;
+  const includeDocumentSummaries = input.includeDocumentSummaries !== false;
+  const includeFullDocuments = input.includeFullDocuments !== false;
+  const includeChunks = input.includeChunks !== false;
+  const includePpContext = input.includePpContext !== false;
+  const includePackageRules = input.includePackageRules !== false;
+  const includeGoldenExample = input.includeGoldenExample !== false;
 
   const caseRow = db
     .prepare(
@@ -401,59 +415,63 @@ export function buildPackageBundle(db: Database.Database, input: BuildPackageBun
     )
     .get(input.caseId) as Record<string, unknown> | undefined;
 
-  const summaries = gatherDocumentSummaries(db, input.caseId);
+  const summaries = includeDocumentSummaries ? gatherDocumentSummaries(db, input.caseId) : [];
   const fullDocuments: FullDocumentText[] = [];
   let charBudget = maxChars;
-  const invalidWholeFileIds = listSourceItemsMissingFromCase(db, input.caseId, input.wholeFileSourceItemIds ?? []);
-  const invalidWholeFileIdSet = new Set(invalidWholeFileIds);
-  for (const sid of invalidWholeFileIds) {
-    warnings.push({
-      code: "skipped_source_item_case_mismatch",
-      message: `Skipped whole-file source item ${sid} because it does not belong to case ${input.caseId}`
-    });
-  }
+  if (includeFullDocuments) {
+    const invalidWholeFileIds = listSourceItemsMissingFromCase(db, input.caseId, input.wholeFileSourceItemIds ?? []);
+    const invalidWholeFileIdSet = new Set(invalidWholeFileIds);
+    for (const sid of invalidWholeFileIds) {
+      warnings.push({
+        code: "skipped_source_item_case_mismatch",
+        message: `Skipped whole-file source item ${sid} because it does not belong to case ${input.caseId}`
+      });
+    }
 
-  for (const sid of input.wholeFileSourceItemIds ?? []) {
-    if (invalidWholeFileIdSet.has(sid.trim())) {
-      continue;
-    }
-    const perDocCap = Math.min(charBudget, DEFAULT_MAX_RETRIEVAL_CHARS);
-    const doc = getFullCanonicalTextForSourceItemInCase(db, input.caseId, sid, { maxChars: perDocCap });
-    if (doc) {
-      fullDocuments.push(doc);
-      charBudget -= doc.full_text.length;
-      if (doc.truncated) {
-        warnings.push({ code: "truncated_document", message: `Document ${sid} truncated to fit context budget` });
+    for (const sid of input.wholeFileSourceItemIds ?? []) {
+      if (invalidWholeFileIdSet.has(sid.trim())) {
+        continue;
       }
-    }
-    if (charBudget <= 0) {
-      warnings.push({ code: "context_budget", message: "Context character budget exhausted" });
-      break;
+      const perDocCap = Math.min(charBudget, DEFAULT_MAX_RETRIEVAL_CHARS);
+      const doc = getFullCanonicalTextForSourceItemInCase(db, input.caseId, sid, { maxChars: perDocCap });
+      if (doc) {
+        fullDocuments.push(doc);
+        charBudget -= doc.full_text.length;
+        if (doc.truncated) {
+          warnings.push({ code: "truncated_document", message: `Document ${sid} truncated to fit context budget` });
+        }
+      }
+      if (charBudget <= 0) {
+        warnings.push({ code: "context_budget", message: "Context character budget exhausted" });
+        break;
+      }
     }
   }
 
   const chunks: ChunkRetrievalResult[] = [];
-  const invalidChunkSourceIds = new Set(
-    listSourceItemsMissingFromCase(
-      db,
-      input.caseId,
-      (input.chunkRequests ?? []).map((req) => req.sourceItemId)
-    )
-  );
-  for (const req of input.chunkRequests ?? []) {
-    if (invalidChunkSourceIds.has(req.sourceItemId.trim())) {
-      warnings.push({
-        code: "skipped_chunk_source_item_case_mismatch",
-        message: `Skipped chunk request for source item ${req.sourceItemId} because it does not belong to case ${input.caseId}`
-      });
-      continue;
+  if (includeChunks) {
+    const invalidChunkSourceIds = new Set(
+      listSourceItemsMissingFromCase(
+        db,
+        input.caseId,
+        (input.chunkRequests ?? []).map((req) => req.sourceItemId)
+      )
+    );
+    for (const req of input.chunkRequests ?? []) {
+      if (invalidChunkSourceIds.has(req.sourceItemId.trim())) {
+        warnings.push({
+          code: "skipped_chunk_source_item_case_mismatch",
+          message: `Skipped chunk request for source item ${req.sourceItemId} because it does not belong to case ${input.caseId}`
+        });
+        continue;
+      }
+      chunks.push(...getPageChunksInCase(db, { caseId: input.caseId, ...req }));
     }
-    chunks.push(...getPageChunksInCase(db, { caseId: input.caseId, ...req }));
   }
 
-  const pp_context = loadPpContextBundle(db, input.caseId);
-  const package_rules = loadPackageRulesForCase(db, input.caseId, input.packageType);
-  const golden_example = findClosestGoldenExample(db, input.packageType, input.caseId);
+  const pp_context = includePpContext ? loadPpContextBundle(db, input.caseId) : null;
+  const package_rules = includePackageRules ? loadPackageRulesForCase(db, input.caseId, input.packageType) : [];
+  const golden_example = includeGoldenExample ? findClosestGoldenExample(db, input.packageType, input.caseId) : null;
 
   const approx =
     JSON.stringify(summaries).length +
@@ -471,7 +489,7 @@ export function buildPackageBundle(db: Database.Database, input: BuildPackageBun
   }
 
   return {
-    case_summary: caseRow ?? {},
+    case_summary: includeCaseSummary ? (caseRow ?? {}) : {},
     document_summaries: summaries,
     full_documents: fullDocuments,
     chunks,

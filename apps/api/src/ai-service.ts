@@ -1,7 +1,13 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import OpenAI from "openai";
-import { buildPackageBundle, DEFAULT_MAX_RETRIEVAL_CHARS, gatherDocumentSummaries } from "./retrieval.js";
+import {
+  getBlueprintPromptText,
+  getBlueprintRetrievalMaxChars,
+  isBlueprintRetrievalFlagEnabled,
+  resolveBlueprintVersionForPackageType
+} from "./blueprints.js";
+import { buildPackageBundle, gatherDocumentSummaries } from "./retrieval.js";
 import { buildCaseProjection } from "./projection.js";
 import { getPacketPreview } from "./exhibits.js";
 
@@ -295,6 +301,11 @@ Recommend exhibits now. Return only valid JSON: { "exhibits": [...] }`;
 export interface PackageRunRow {
   id: string;
   packet_id: string;
+  blueprint_version_id: string | null;
+  blueprint_version: string | null;
+  blueprint_key: string | null;
+  blueprint_name: string | null;
+  blueprint_execution_engine: string | null;
   status: string;
   approval_status: string | null;
   approved_at: string | null;
@@ -319,14 +330,50 @@ export interface PackageRunRow {
   created_at: string;
 }
 
+const PACKAGE_RUN_SELECT = `
+  SELECT
+    pr.id,
+    pr.packet_id,
+    pr.blueprint_version_id,
+    pr.status,
+    pr.approval_status,
+    pr.approved_at,
+    pr.approved_by,
+    pr.approved_by_user_id,
+    pr.approval_note,
+    pr.input_json,
+    pr.output_json,
+    pr.citations_json,
+    pr.error_message,
+    pr.error_code,
+    pr.model,
+    pr.prompt_tokens,
+    pr.completion_tokens,
+    pr.retrieval_warnings_json,
+    pr.started_at,
+    pr.completed_at,
+    pr.latest_export_format,
+    pr.latest_export_path,
+    pr.latest_export_bytes,
+    pr.latest_exported_at,
+    pr.created_at,
+    bv.version AS blueprint_version,
+    b.blueprint_key,
+    b.name AS blueprint_name,
+    b.execution_engine AS blueprint_execution_engine
+  FROM package_runs pr
+  LEFT JOIN blueprint_versions bv ON bv.id = pr.blueprint_version_id
+  LEFT JOIN blueprints b ON b.id = bv.blueprint_id
+`;
+
 export function listPackageRunsForPacket(db: Database.Database, packetId: string): PackageRunRow[] {
   return db
-    .prepare(`SELECT * FROM package_runs WHERE packet_id = ? ORDER BY created_at DESC LIMIT 100`)
+    .prepare(`${PACKAGE_RUN_SELECT} WHERE pr.packet_id = ? ORDER BY pr.created_at DESC LIMIT 100`)
     .all(packetId) as PackageRunRow[];
 }
 
 export function getPackageRun(db: Database.Database, runId: string): PackageRunRow | null {
-  return (db.prepare(`SELECT * FROM package_runs WHERE id = ?`).get(runId) as PackageRunRow | undefined) ?? null;
+  return (db.prepare(`${PACKAGE_RUN_SELECT} WHERE pr.id = ?`).get(runId) as PackageRunRow | undefined) ?? null;
 }
 
 /** Split uploaded interrogatory / RFP text into individual numbered requests (heuristic). Exported for tests. */
@@ -345,59 +392,6 @@ export function parseInterrogatoryRequests(text: string): string[] {
   if (altChunks.length > 1) return altChunks;
 
   return [t];
-}
-
-function packetWorkerSystemPrompt(packageType: string): string {
-  if (packageType === "hearing_packet") {
-    return `You are a Minnesota workers' compensation hearing-prep assistant. Use ONLY the retrieval bundle JSON and hearing packet context supplied by the user. Do not invent facts, dates, judges, exhibits, missing proof, or witness roles.
-
-Output a single JSON object with keys:
-- case_profile (object): hearing context, requested relief summary, major risks.
-- issue_matrix (array of objects): one row per issue with defense gap, support level, and what proof answers it.
-- fact_timeline (array of objects): dated or sequenced facts tied to sources.
-- exhibit_catalog (array of objects): proposed exhibit list with why offered and issue proved.
-- witness_matrix (array of objects): people/witnesses, what they prove, and risks.
-- deadlines_and_requirements (object): deadlines, required filings, unresolved compliance items.
-- read_coverage_log (object): what appears covered vs what still needs verification from the file.
-- open_questions (array of objects): contradictions, missing proof, OCR/review gaps, legal calls.
-- proof_to_relief_graph (array of objects): requested relief, legal elements, supporting proof, and remaining gaps.
-- hearing_readiness_checklist (array of { check_id, label, status: "pass"|"fail"|"warn", detail }): operational and proof readiness checks.
-- draft_markdown (string): a hearing-prep memo / argument-ready narrative summary.
-- citations (array of { claim, source_item_id, canonical_page_id, page_text_excerpt }): cite every material factual assertion.
-- qa_checklist (array of { check_id, label, status: "pass"|"fail"|"warn", detail }): package-level QA.
-
-Rules:
-- Be explicit when a field is uncertain.
-- Put uncertainty in open_questions and checklist warnings instead of guessing.
-- Prefer compact, issue-driven outputs over bloated summaries.
-- Ground exhibit and witness choices in the actual packet context and retrieved matter evidence.`;
-  }
-  if (packageType === "claim_petition") {
-    return `You are a Minnesota workers' compensation paralegal/attorney assistant. The Workers' Compensation Court of Appeals (WCCA) and Office of Administrative Hearings (OAH) filing context applies. Draft ONLY from the retrieval bundle JSON (case_summary, document_summaries, full_documents, pp_context, package_rules). Do not invent facts, dates, providers, or docket numbers.
-
-Output a single JSON object with keys:
-- draft_markdown (string): combined draft in markdown with sections --- Cover letter ---, --- Claim petition ---, and optional --- Intervention notice ---, --- Affidavit of service --- when rules/package_rules indicate.
-- citations (array of { claim: string, source_item_id: string|null, canonical_page_id: string|null, page_text_excerpt: string }): one entry per material factual assertion tied to a source.
-- qa_checklist (array of { check_id: string, label: string, status: "pass"|"fail"|"warn", detail: string }): include medical_causation_document_present (warn if no treating/narrative support found), required_filing_elements (pass/fail), intervention_if_applicable, affidavit_if_required.
-- assembly_recommendations (array of { title: string, source_item_ids: string[], rationale: string }): suggested exhibits to attach.
-- missing_proof (array of { item: string, severity: "blocker"|"warn" }): e.g. missing medical causation narrative, missing NOID, etc.
-
-Use Minnesota WC practice framing (not California). Cite every factual claim.`;
-  }
-  if (packageType === "discovery_response") {
-    return `You are a Minnesota workers' compensation attorney assistant. The uploaded interrogatories or requests for production appear as full text in the retrieval bundle (full_documents). Use ONLY the bundle for facts; flag gaps honestly.
-
-Output a single JSON object with keys:
-- draft_markdown (string): markdown with a clear subsection per numbered interrogatory/request (use the same numbering as the discovery set). For each, give a concise proposed response and standard objections where appropriate (relevance, privilege, overbreadth, vagueness) when supported by the rules and facts.
-- interrogatory_parse (array of { index: number, label: string, summary: string }): mirror the machine-parsed list you receive in the user message; refine labels if needed.
-- citations (same shape as claim_petition).
-- qa_checklist (array of { check_id, label, status: "pass"|"fail"|"warn", detail }): include per-request weak_support flags.
-- assembly_recommendations (same shape as claim_petition).
-- objection_flags (array of { request_index: number, objection: string, basis: string }).
-
-Mark weakly supported answers with qa_checklist status "warn".`;
-  }
-  return `You are a Minnesota workers' compensation legal assistant helping prepare exhibit/hearing packets. Output valid JSON with keys: exhibits (array of { exhibit_label, title, source_item_ids, rationale }), citations (array of { claim, source_item_id, canonical_page_id, page_text_excerpt }), qa_checklist (array of { check_id, label, status: pass|fail|warn, detail }), draft_markdown (optional hearing summary or exhibit overview). Ground answers in the retrieval bundle only.`;
 }
 
 export function updatePackageRunDraft(db: Database.Database, runId: string, editedMarkdown: string): PackageRunRow | null {
@@ -447,14 +441,13 @@ export async function runPackageWorker(
     wholeFileSourceItemIds?: string[];
   }
 ): Promise<PackageRunRow> {
-  const model = DEFAULT_MODEL;
   const runId = randomUUID();
   const client = getOpenAIClient();
 
   const packet = db
     .prepare(
       `
-        SELECT id, case_id, package_type, package_label, target_document_source_item_id, packet_name
+        SELECT id, case_id, package_type, package_label, target_document_source_item_id, packet_name, blueprint_version_id
         FROM exhibit_packets WHERE id = ? LIMIT 1
       `
     )
@@ -466,6 +459,7 @@ export async function runPackageWorker(
         package_label: string | null;
         target_document_source_item_id: string | null;
         packet_name: string;
+        blueprint_version_id: string | null;
       }
     | undefined;
 
@@ -473,50 +467,70 @@ export async function runPackageWorker(
     db.prepare(
       `INSERT INTO package_runs (id, packet_id, status, error_message, error_code, model, completed_at)
        VALUES (?, ?, 'failed', ?, ?, ?, CURRENT_TIMESTAMP)`
-    ).run(runId, input.packetId, "packet not found for case", "packet_case_mismatch", model);
-    return db.prepare(`SELECT * FROM package_runs WHERE id = ?`).get(runId) as PackageRunRow;
+    ).run(runId, input.packetId, "packet not found for case", "packet_case_mismatch", DEFAULT_MODEL);
+    return getPackageRun(db, runId) as PackageRunRow;
   }
 
+  const blueprint = resolveBlueprintVersionForPackageType(db, packet.package_type, packet.blueprint_version_id);
   const targetId = packet.target_document_source_item_id;
   const wholeIds = [...(input.wholeFileSourceItemIds ?? [])];
-  if (targetId && !wholeIds.includes(targetId)) {
+  if (
+    targetId &&
+    isBlueprintRetrievalFlagEnabled(blueprint, "prepend_target_document", true) &&
+    !wholeIds.includes(targetId)
+  ) {
     wholeIds.unshift(targetId);
   }
-
+  const model = blueprint?.default_model?.trim() || DEFAULT_MODEL;
+  const retrievalMaxChars = getBlueprintRetrievalMaxChars(blueprint);
   const bundle = buildPackageBundle(db, {
     caseId: input.caseId,
     packageType: packet.package_type,
     wholeFileSourceItemIds: wholeIds,
-    maxChars: DEFAULT_MAX_RETRIEVAL_CHARS
+    maxChars: retrievalMaxChars,
+    includeCaseSummary: isBlueprintRetrievalFlagEnabled(blueprint, "include_case_summary", true),
+    includeDocumentSummaries: isBlueprintRetrievalFlagEnabled(blueprint, "include_document_summaries", true),
+    includeFullDocuments: isBlueprintRetrievalFlagEnabled(blueprint, "include_full_documents", true),
+    includeChunks: isBlueprintRetrievalFlagEnabled(blueprint, "include_chunks", true),
+    includePpContext: isBlueprintRetrievalFlagEnabled(blueprint, "include_pp_context", true),
+    includePackageRules: isBlueprintRetrievalFlagEnabled(blueprint, "include_package_rules", true),
+    includeGoldenExample: isBlueprintRetrievalFlagEnabled(blueprint, "include_golden_example", true)
   });
 
   const bundleJson = JSON.stringify(bundle);
 
   if (!client) {
     db.prepare(
-      `INSERT INTO package_runs (id, packet_id, status, input_json, error_message, error_code, model, retrieval_warnings_json, completed_at)
-       VALUES (?, ?, 'failed', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+      `INSERT INTO package_runs (id, packet_id, blueprint_version_id, status, input_json, error_message, error_code, model, retrieval_warnings_json, completed_at)
+       VALUES (?, ?, ?, 'failed', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
     ).run(
       runId,
       input.packetId,
-      JSON.stringify({ packet_id: input.packetId, package_type: packet.package_type }),
+      blueprint?.blueprint_version_id ?? null,
+      JSON.stringify({
+        packet_id: input.packetId,
+        package_type: packet.package_type,
+        blueprint_version_id: blueprint?.blueprint_version_id ?? null,
+        blueprint_key: blueprint?.blueprint_key ?? null,
+        blueprint_version: blueprint?.blueprint_version ?? null
+      }),
       "OPENAI_API_KEY not configured",
       "missing_api_key",
       model,
       JSON.stringify(bundle.warnings)
     );
-    return db.prepare(`SELECT * FROM package_runs WHERE id = ?`).get(runId) as PackageRunRow;
+    return getPackageRun(db, runId) as PackageRunRow;
   }
 
-  const systemPrompt = packetWorkerSystemPrompt(packet.package_type);
+  const systemPrompt = getBlueprintPromptText(blueprint, packet.package_type);
   let discoveryAux = "";
-  if (packet.package_type === "discovery_response") {
+  if (isBlueprintRetrievalFlagEnabled(blueprint, "include_discovery_parse", packet.package_type === "discovery_response")) {
     const joined = bundle.full_documents.map((d) => d.full_text).join("\n\n");
     const parsed = parseInterrogatoryRequests(joined);
     discoveryAux = `\n\nParsed interrogatory/request segments (${parsed.length} segments, heuristic): ${JSON.stringify(parsed.slice(0, 200))}`;
   }
   let hearingAux = "";
-  if (packet.package_type === "hearing_packet") {
+  if (isBlueprintRetrievalFlagEnabled(blueprint, "include_hearing_context", packet.package_type === "hearing_packet")) {
     const projection = buildCaseProjection(db, input.caseId);
     const packetPreview = getPacketPreview(db, input.packetId);
     const hearingContext = {
@@ -528,20 +542,28 @@ export async function runPackageWorker(
     };
     hearingAux = `\n\nHearing packet context (JSON):\n${JSON.stringify(hearingContext).slice(
       0,
-      Math.min(JSON.stringify(hearingContext).length, Math.floor(DEFAULT_MAX_RETRIEVAL_CHARS / 2))
+      Math.min(JSON.stringify(hearingContext).length, Math.floor(retrievalMaxChars / 2))
     )}`;
   }
   const userPrompt = `Package: ${packet.packet_name} (${packet.package_type})
 ${packet.package_label ? `Label: ${packet.package_label}\n` : ""}
-Retrieval bundle (JSON):\n${bundleJson.slice(0, Math.min(bundleJson.length, DEFAULT_MAX_RETRIEVAL_CHARS))}${discoveryAux}${hearingAux}`;
+${blueprint ? `Blueprint: ${blueprint.blueprint_name} (${blueprint.blueprint_version})\n` : ""}Retrieval bundle (JSON):\n${bundleJson.slice(0, Math.min(bundleJson.length, retrievalMaxChars))}${discoveryAux}${hearingAux}`;
 
   db.prepare(
-    `INSERT INTO package_runs (id, packet_id, status, input_json, model, started_at, retrieval_warnings_json)
-     VALUES (?, ?, 'running', ?, ?, CURRENT_TIMESTAMP, ?)`
+    `INSERT INTO package_runs (id, packet_id, blueprint_version_id, status, input_json, model, started_at, retrieval_warnings_json)
+     VALUES (?, ?, ?, 'running', ?, ?, CURRENT_TIMESTAMP, ?)`
   ).run(
     runId,
     input.packetId,
-    JSON.stringify({ packet_id: input.packetId, package_type: packet.package_type, bundle_chars: bundle.approx_char_count }),
+    blueprint?.blueprint_version_id ?? null,
+    JSON.stringify({
+      packet_id: input.packetId,
+      package_type: packet.package_type,
+      blueprint_version_id: blueprint?.blueprint_version_id ?? null,
+      blueprint_key: blueprint?.blueprint_key ?? null,
+      blueprint_version: blueprint?.blueprint_version ?? null,
+      bundle_chars: bundle.approx_char_count
+    }),
     model,
     JSON.stringify(bundle.warnings)
   );
@@ -589,7 +611,7 @@ Retrieval bundle (JSON):\n${bundleJson.slice(0, Math.min(bundleJson.length, DEFA
     );
   }
 
-  return db.prepare(`SELECT * FROM package_runs WHERE id = ?`).get(runId) as PackageRunRow;
+  return getPackageRun(db, runId) as PackageRunRow;
 }
 
 export function recordClassificationSignal(

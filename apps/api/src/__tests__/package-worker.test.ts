@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createTestDb, seedCase } from "./test-helpers.js";
+import { createSeededTestDb, createTestDb, seedCase } from "./test-helpers.js";
 import { createExhibitPacket } from "../exhibits.js";
-import { parseInterrogatoryRequests, updatePackageRunDraft } from "../ai-service.js";
+import { parseInterrogatoryRequests, runPackageWorker, updatePackageRunDraft } from "../ai-service.js";
 
 describe("package worker helpers", () => {
   it("parseInterrogatoryRequests splits INTERROGATORY NO. blocks", () => {
@@ -97,5 +97,44 @@ List all employers in the last five years.
     const back = JSON.parse(s) as typeof sample;
     expect(back.qa_checklist[0]?.status).toBe("warn");
     expect(Array.isArray(back.citations)).toBe(true);
+  });
+
+  it("binds blueprint metadata onto packets and package runs before provider execution", async () => {
+    const db = createSeededTestDb();
+    const caseId = randomUUID();
+    seedCase(db, { caseId, name: "Blueprint Package Test" });
+    const previousApiKey = process.env.OPENAI_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+
+    try {
+      const created = createExhibitPacket(db, {
+        caseId,
+        packetName: "Claim Petition Packet",
+        packageType: "claim_petition"
+      });
+      expect(created.ok).toBe(true);
+      expect(created.packet?.blueprint_key).toBe("claim_petition_default");
+      expect(created.packet?.blueprint_version).toBe("v1");
+      expect(created.packet?.blueprint_execution_engine).toBe("package_worker");
+
+      const run = await runPackageWorker(db, {
+        caseId,
+        packetId: created.packet!.id
+      });
+
+      expect(run.status).toBe("failed");
+      expect(run.error_code).toBe("missing_api_key");
+      expect(run.blueprint_version_id).toBeTruthy();
+      expect(run.blueprint_key).toBe("claim_petition_default");
+      expect(run.blueprint_version).toBe("v1");
+      expect(run.blueprint_name).toBe("Claim Petition");
+      expect(run.blueprint_execution_engine).toBe("package_worker");
+    } finally {
+      if (previousApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousApiKey;
+      }
+    }
   });
 });

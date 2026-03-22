@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
+import { resolveBlueprintVersionForPackageType } from "./blueprints.js";
 
 type ExhibitPacketStatus = "draft" | "needs_review" | "ready" | "finalized" | "exported" | "archived";
 type ExhibitPacketMode = "compact" | "full";
@@ -70,7 +71,7 @@ function recordHistory(
 }
 
 function getPacketRow(db: Database.Database, packetId: string) {
-  return db
+  const row = db
     .prepare(
       `
         SELECT
@@ -84,6 +85,7 @@ function getPacketRow(db: Database.Database, packetId: string) {
           package_type,
           package_label,
           target_document_source_item_id,
+          blueprint_version_id,
           run_status,
           created_at,
           updated_at
@@ -104,11 +106,26 @@ function getPacketRow(db: Database.Database, packetId: string) {
         package_type: string;
         package_label: string | null;
         target_document_source_item_id: string | null;
+        blueprint_version_id: string | null;
         run_status: string | null;
         created_at: string;
         updated_at: string;
       }
     | undefined;
+
+  if (!row) {
+    return undefined;
+  }
+
+  const blueprint = resolveBlueprintVersionForPackageType(db, row.package_type, row.blueprint_version_id);
+  return {
+    ...row,
+    blueprint_version_id: blueprint?.blueprint_version_id ?? row.blueprint_version_id ?? null,
+    blueprint_version: blueprint?.blueprint_version ?? null,
+    blueprint_key: blueprint?.blueprint_key ?? null,
+    blueprint_name: blueprint?.blueprint_name ?? null,
+    blueprint_execution_engine: blueprint?.execution_engine ?? null
+  };
 }
 
 function sourceItemBelongsToCase(db: Database.Database, sourceItemId: string, caseId: string) {
@@ -658,6 +675,7 @@ export function createExhibitPacket(
   const namingScheme = input.namingScheme?.trim() || "letters";
   const packageType = input.packageType?.trim() || "hearing_packet";
   const targetDocumentSourceItemId = input.targetDocumentSourceItemId?.trim() || null;
+  const resolvedBlueprint = resolveBlueprintVersionForPackageType(db, packageType);
 
   if (targetDocumentSourceItemId && !sourceItemBelongsToCase(db, targetDocumentSourceItemId, input.caseId)) {
     return {
@@ -690,9 +708,9 @@ export function createExhibitPacket(
       `
         INSERT INTO exhibit_packets
           (id, case_id, packet_name, packet_mode, naming_scheme, status, metadata_json,
-           package_type, package_label, target_document_source_item_id)
+           package_type, package_label, target_document_source_item_id, blueprint_version_id)
         VALUES
-          (?, ?, ?, ?, ?, 'draft', '{}', ?, ?, ?)
+          (?, ?, ?, ?, ?, 'draft', '{}', ?, ?, ?, ?)
       `
     ).run(
       packetId,
@@ -702,7 +720,8 @@ export function createExhibitPacket(
       namingScheme,
       packageType,
       input.packageLabel?.trim() ?? null,
-      targetDocumentSourceItemId
+      targetDocumentSourceItemId,
+      resolvedBlueprint?.blueprint_version_id ?? null
     );
 
     const sectionIds: string[] = [];
@@ -745,7 +764,8 @@ export function createExhibitPacket(
         packet_mode: packetMode,
         naming_scheme: namingScheme,
         starter_slots: starterCount,
-        package_type: packageType
+        package_type: packageType,
+        blueprint_version_id: resolvedBlueprint?.blueprint_version_id ?? null
       }
     });
   })();
@@ -809,6 +829,9 @@ export function updateExhibitPacket(
   if (Object.hasOwn(input, "packageType")) {
     updates.push("package_type = ?");
     params.push(input.packageType?.trim() || "hearing_packet");
+    const nextBlueprint = resolveBlueprintVersionForPackageType(db, input.packageType?.trim() || "hearing_packet");
+    updates.push("blueprint_version_id = ?");
+    params.push(nextBlueprint?.blueprint_version_id ?? null);
   }
   if (Object.hasOwn(input, "packageLabel")) {
     updates.push("package_label = ?");

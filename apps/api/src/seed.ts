@@ -1,11 +1,7 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import {
-  documentTypeAliasSeeds,
-  documentTypeSeeds,
-  hearingPrepPreset,
-  medicalRequestBranch
-} from "@wc/wc-rules";
+import { documentTypeAliasSeeds, documentTypeSeeds, hearingPrepPreset, medicalRequestBranch } from "@wc/wc-rules";
+import { DEFAULT_BLUEPRINT_SEEDS } from "./blueprints.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -849,6 +845,176 @@ export function seedFoundation(db: Database.Database) {
         rule_value: JSON.stringify(row.rule_value),
         created_at: createdAt
       });
+    }
+
+    const blueprintTablesReady =
+      Boolean(
+        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'blueprints' LIMIT 1`).get()
+      ) &&
+      Boolean(
+        db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'blueprint_versions' LIMIT 1`).get()
+      );
+
+    if (blueprintTablesReady) {
+      const insertBlueprint = db.prepare(`
+        INSERT INTO blueprints
+          (id, blueprint_key, package_type, name, description, execution_engine, product_preset_id, created_at, updated_at)
+        VALUES
+          (@id, @blueprint_key, @package_type, @name, @description, @execution_engine, @product_preset_id, @created_at, @updated_at)
+        ON CONFLICT(blueprint_key) DO UPDATE SET
+          package_type = excluded.package_type,
+          name = excluded.name,
+          description = excluded.description,
+          execution_engine = excluded.execution_engine,
+          product_preset_id = excluded.product_preset_id,
+          updated_at = excluded.updated_at
+      `);
+
+      const insertBlueprintVersion = db.prepare(`
+        INSERT INTO blueprint_versions
+          (
+            id,
+            blueprint_id,
+            version,
+            status,
+            default_model,
+            prompt_contract_json,
+            retrieval_profile_json,
+            output_contract_json,
+            provenance_policy_json,
+            evaluation_policy_json,
+            linked_rulepack_version,
+            linked_workflow_states_json,
+            linked_approval_gates_json,
+            linked_artifact_templates_json,
+            created_at,
+            updated_at
+          )
+        VALUES
+          (
+            @id,
+            @blueprint_id,
+            @version,
+            @status,
+            @default_model,
+            @prompt_contract_json,
+            @retrieval_profile_json,
+            @output_contract_json,
+            @provenance_policy_json,
+            @evaluation_policy_json,
+            @linked_rulepack_version,
+            @linked_workflow_states_json,
+            @linked_approval_gates_json,
+            @linked_artifact_templates_json,
+            @created_at,
+            @updated_at
+          )
+        ON CONFLICT(blueprint_id, version) DO UPDATE SET
+          status = excluded.status,
+          default_model = excluded.default_model,
+          prompt_contract_json = excluded.prompt_contract_json,
+          retrieval_profile_json = excluded.retrieval_profile_json,
+          output_contract_json = excluded.output_contract_json,
+          provenance_policy_json = excluded.provenance_policy_json,
+          evaluation_policy_json = excluded.evaluation_policy_json,
+          linked_rulepack_version = excluded.linked_rulepack_version,
+          linked_workflow_states_json = excluded.linked_workflow_states_json,
+          linked_approval_gates_json = excluded.linked_approval_gates_json,
+          linked_artifact_templates_json = excluded.linked_artifact_templates_json,
+          updated_at = excluded.updated_at
+      `);
+
+      for (const spec of DEFAULT_BLUEPRINT_SEEDS) {
+        const productPresetId = spec.productPresetKey ? getIdByKey("product_presets", "key", spec.productPresetKey) : null;
+        const blueprintId = getIdByKey("blueprints", "blueprint_key", spec.key) ?? randomUUID();
+        insertBlueprint.run({
+          id: blueprintId,
+          blueprint_key: spec.key,
+          package_type: spec.packageType,
+          name: spec.name,
+          description: spec.description,
+          execution_engine: spec.executionEngine,
+          product_preset_id: productPresetId,
+          created_at: createdAt,
+          updated_at: createdAt
+        });
+
+        const linkedWorkflowStates =
+          productPresetId &&
+          (db
+            .prepare(
+              `
+                SELECT state_key
+                FROM product_workflows
+                WHERE product_preset_id = ?
+                ORDER BY sort_order ASC, state_key ASC
+              `
+            )
+            .all(productPresetId) as Array<{ state_key: string }>).map((row) => row.state_key);
+
+        const linkedApprovalGates =
+          productPresetId &&
+          (db
+            .prepare(
+              `
+                SELECT gate_key
+                FROM approval_gates
+                WHERE product_preset_id = ?
+                ORDER BY sort_order ASC, gate_key ASC
+              `
+            )
+            .all(productPresetId) as Array<{ gate_key: string }>).map((row) => row.gate_key);
+
+        const linkedArtifactTemplates =
+          productPresetId &&
+          (db
+            .prepare(
+              `
+                SELECT artifact_key
+                FROM artifact_templates
+                WHERE product_preset_id = ?
+                ORDER BY artifact_key ASC
+              `
+            )
+            .all(productPresetId) as Array<{ artifact_key: string }>).map((row) => row.artifact_key);
+
+        const linkedRulepackVersion =
+          productPresetId &&
+          ((db
+            .prepare(
+              `
+                SELECT version
+                FROM product_rulepacks
+                WHERE product_preset_id = ?
+                ORDER BY created_at DESC, version DESC
+                LIMIT 1
+              `
+            )
+            .get(productPresetId) as { version: string } | undefined)?.version ?? null);
+
+        const blueprintVersionId =
+          getIdByQuery(`SELECT id FROM blueprint_versions WHERE blueprint_id = ? AND version = ? LIMIT 1`, blueprintId, spec.version) ??
+          randomUUID();
+
+        insertBlueprintVersion.run({
+          id: blueprintVersionId,
+          blueprint_id: blueprintId,
+          version: spec.version,
+          status: "active",
+          default_model: spec.defaultModel,
+          prompt_contract_json: JSON.stringify(spec.promptContract),
+          retrieval_profile_json: JSON.stringify(spec.retrievalProfile),
+          output_contract_json: JSON.stringify(spec.outputContract),
+          provenance_policy_json: JSON.stringify(spec.provenancePolicy),
+          evaluation_policy_json: JSON.stringify(spec.evaluationPolicy),
+          linked_rulepack_version: linkedRulepackVersion,
+          linked_workflow_states_json: JSON.stringify(linkedWorkflowStates ?? []),
+          linked_approval_gates_json: JSON.stringify(linkedApprovalGates ?? []),
+          linked_artifact_templates_json: JSON.stringify(linkedArtifactTemplates ?? []),
+          created_at: createdAt,
+          updated_at: createdAt
+        });
+      }
     }
 
     const branchId = getIdByKey("branch_templates", "key", medicalRequestBranch.key) ?? randomUUID();

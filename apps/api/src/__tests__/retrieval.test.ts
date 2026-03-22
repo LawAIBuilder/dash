@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSeededTestDb } from "./test-helpers.js";
+import { createSeededTestDb, seedCase } from "./test-helpers.js";
 import { hydrateBoxInventory, normalizeCaseDocumentSpine } from "../runtime.js";
 import {
   buildPackageBundle,
@@ -240,6 +240,34 @@ describe("gatherDocumentSummaries", () => {
       pageEnd: 1
     });
     expect(blockedChunks).toHaveLength(0);
+
+    db.close();
+  });
+
+  it("honors retrieval profile flags when a blueprint disables bundle sections", () => {
+    const db = createSeededTestDb();
+    seedCase(db, { caseId: "case-retrieval-flags", name: "Flagged Matter" });
+
+    const bundle = buildPackageBundle(db, {
+      caseId: "case-retrieval-flags",
+      packageType: "claim_petition",
+      includeCaseSummary: false,
+      includeDocumentSummaries: false,
+      includeFullDocuments: false,
+      includeChunks: false,
+      includePpContext: false,
+      includePackageRules: false,
+      includeGoldenExample: false
+    });
+
+    expect(bundle.case_summary).toEqual({});
+    expect(bundle.document_summaries).toEqual([]);
+    expect(bundle.full_documents).toEqual([]);
+    expect(bundle.chunks).toEqual([]);
+    expect(bundle.pp_context).toBeNull();
+    expect(bundle.package_rules).toEqual([]);
+    expect(bundle.golden_example).toBeNull();
+    expect(bundle.warnings).toEqual([]);
 
     db.close();
   });

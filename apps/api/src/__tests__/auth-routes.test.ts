@@ -230,4 +230,47 @@ describe("auth routes", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("does not consume the login bucket for successful logins", async () => {
+    const root = createTempRoot("wc-auth-success-rate-limit-");
+    const dbDir = join(root, "persistent");
+    mkdirSync(dbDir, { recursive: true });
+
+    const server = await loadServerWithEnv(root, {
+      WC_SQLITE_PATH: join(dbDir, "authoritative.sqlite"),
+      WC_SESSION_SECRET: "test-session-secret",
+      WC_BOOTSTRAP_ADMIN_EMAIL: "admin@example.com",
+      WC_BOOTSTRAP_ADMIN_PASSWORD: "test-password-123",
+      WC_BOOTSTRAP_ADMIN_NAME: "Test Admin",
+      WC_AUTH_LOGIN_RATE_LIMIT_MAX: "1",
+      WC_AUTH_LOGIN_RATE_LIMIT_WINDOW_MS: "60000"
+    });
+
+    try {
+      const first = await server.app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          email: "admin@example.com",
+          password: "test-password-123"
+        }
+      });
+      expect(first.statusCode).toBe(200);
+
+      const second = await server.app.inject({
+        method: "POST",
+        url: "/api/auth/login",
+        payload: {
+          email: "admin@example.com",
+          password: "test-password-123"
+        }
+      });
+      expect(second.statusCode).toBe(200);
+      expect(second.headers["x-rate-limit-limit"]).toBeUndefined();
+      expect(second.headers["x-rate-limit-remaining"]).toBeUndefined();
+    } finally {
+      await server.cleanup();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
