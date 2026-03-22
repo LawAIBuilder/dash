@@ -5,19 +5,12 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { readPositiveIntegerEnv } from "./env.js";
 import { toSafeFilesystemSegment } from "./fs-safety.js";
+import { resolveMatterUploadDirectory } from "./storage-paths.js";
 import { upsertSourceItemRecord, upsertSourceVersionRecord } from "./source-persistence.js";
 import { normalizeSourceItemDocumentSpine } from "./runtime.js";
 
 /** Fixed migration seed id in source_connections (provider matter_upload) */
 export const MATTER_UPLOAD_CONNECTION_ID = "a0000001-0000-4000-8000-000000000001";
-
-export function resolveMatterUploadDirectory() {
-  const fromEnv = process.env.WC_UPLOAD_DIR?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
-  return join(process.cwd(), "data", "uploads");
-}
 
 function sanitizeFilename(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 200) || "upload.bin";

@@ -139,6 +139,8 @@ Set these in the host **secret store** / env UI (never commit real values):
 | `WC_SOURCE_CONNECTION_SECRET` | Strongly recommended if PP OAuth used | Encrypts stored connector metadata/tokens; see `pp-provider` and connector code paths. |
 | `WC_EXPORT_DIR` | If package DOCX exports used | Writable directory for package-run DOCX exports. |
 | `WC_EXHIBIT_EXPORT_DIR` | If packet PDF exports used | Writable directory for exhibit packet PDF exports. |
+| `WC_UPLOAD_DIR` | If local uploads are used | Writable directory for matter-upload file assets; include in backups if uploads are authoritative. |
+| `WC_BACKUP_DIR` | Recommended | Writable directory for operator-created backup snapshots. Defaults to a `backups/` sibling next to the SQLite file if unset. |
 
 **Static client (baked at build time):**
 
@@ -172,10 +174,91 @@ Rebuild and redeploy the static app whenever the API URL or key strategy changes
 
 ### 6. Backup and restore (minimum)
 
-- SQLite lives in one file (+ often `-wal` / `-shm`). Back up with the API **quiesced** or use SQLite’s online backup API; document who runs backups and how often.
-- Run a **restore drill** on a non-production clone at least once before calling the environment “production.”
+#### 6a. Preferred operator snapshot
 
-### 7. Hosted-web stop line (from product plan)
+Create an authenticated snapshot through the API:
+
+```bash
+curl \
+  -X POST \
+  -H "Authorization: Bearer ${WC_API_KEY}" \
+  -H "Content-Type: application/json" \
+  https://<api-origin>/api/ops/backups/snapshot \
+  -d '{"label":"before-upgrade"}'
+```
+
+Current behavior:
+
+- Writes a **standalone SQLite backup file** using SQLite’s online backup API (no separate `-wal` / `-shm` copy needed for the route-generated snapshot).
+- Writes a `manifest.json` describing source paths and copied directories.
+- Copies these directories into the snapshot when they exist:
+  - package DOCX exports (`WC_EXPORT_DIR` or default path)
+  - exhibit PDF exports (`WC_EXHIBIT_EXPORT_DIR` or default path)
+  - matter uploads (`WC_UPLOAD_DIR` or default path)
+- Stores the snapshot under `WC_BACKUP_DIR` or, if unset, a `backups/` sibling next to the SQLite file.
+
+If a **configured** backup source directory is missing or invalid, the snapshot route fails instead of silently creating a partial backup.
+
+#### 6b. Manual fallback
+
+If the API route is unavailable, stop the service and copy:
+
+- the SQLite file at `WC_SQLITE_PATH`
+- the matching `-wal` and `-shm` files if present
+- `WC_EXPORT_DIR` if used
+- `WC_EXHIBIT_EXPORT_DIR` if used
+- `WC_UPLOAD_DIR` if used for authoritative matter uploads
+
+Document who runs this, how often, and where snapshots are stored.
+
+#### 6c. Restore drill
+
+Run this on a non-production clone before calling the environment production-ready:
+
+1. Stop the API/worker service or point a staging clone at isolated paths.
+2. Restore the SQLite backup file to the target `WC_SQLITE_PATH`.
+3. Restore package exports, exhibit exports, and uploads to the paths expected by env.
+4. Confirm restored directories are writable by the service user.
+5. Start the service and verify:
+   - `GET /health`
+   - `GET /api/ops/readiness`
+   - `GET /api/workers/ocr/health`
+6. Spot-check one matter with uploads and one matter with exports to confirm files open correctly.
+
+Record the snapshot ID or manual backup location used for the drill.
+
+### 7. Operator runbooks
+
+#### 7a. Deploy / update
+
+1. Create a backup snapshot and record the returned snapshot ID.
+2. Confirm env changes, especially `WC_SQLITE_PATH`, `WC_EXPORT_DIR`, `WC_EXHIBIT_EXPORT_DIR`, and `WC_UPLOAD_DIR`.
+3. Deploy the new build and start via `npm run start:railway` (or the platform equivalent).
+4. Run post-deploy smoke checks from section 5.
+5. If smoke fails, restore from the recorded snapshot before further changes.
+
+#### 7b. Restart
+
+- **API wedged or deploy failed:** restart the full supervised service so API + OCR worker come back together.
+- **Worker stale but API healthy:** in the current `start:railway` topology, restart the full service; if you later split deployments, restart the worker service only.
+- **After restart:** recheck `/health`, `/api/workers/ocr/health`, and `/api/ops/readiness`.
+
+#### 7c. API up, worker down
+
+Symptoms:
+
+- `/health` is green
+- `/api/workers/ocr/health` is stale
+- OCR queue grows or uploaded PDFs remain without extracted text
+
+Actions:
+
+1. Check worker logs first.
+2. Restart the supervised service (or worker-only service if topology later splits).
+3. Re-run `/api/workers/ocr/health` until heartbeat is fresh.
+4. Confirm OCR queue begins draining on a test matter.
+
+### 8. Hosted-web stop line (from product plan)
 
 Hosted internal web is the **default** operating mode when:
 
@@ -184,7 +267,7 @@ Hosted internal web is the **default** operating mode when:
 - OCR continues without a human babysitting a separate worker terminal (supervisor handles worker).
 - Backups and restore are **documented and tested**.
 
-### 8. What this checklist explicitly does not do
+### 9. What this checklist explicitly does not do
 
 - Multi-tenant public SaaS hardening (see [HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md) Phase 2).
 - PostgreSQL or auth migration (separate epic after hosted internal is stable).

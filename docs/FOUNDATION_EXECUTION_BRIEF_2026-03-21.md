@@ -47,7 +47,7 @@ These are **requirements**, not suggestions:
 1. **Build artifacts:** Production build must produce at minimum: `apps/api/dist/server.js`, `apps/api/dist/ocr-worker-service.js`, `apps/api/dist/start-railway.js` (verify via `npm run build` and listing `apps/api/dist/`).
 2. **Binding:** Hosted environments set **`WC_API_HOST=0.0.0.0`** so the API listens on all interfaces ([`DEPLOY.md`](./DEPLOY.md)).
 3. **`PORT`:** Platform-provided or explicitly set; API must read `PORT` as today ([`server.ts`](../apps/api/src/server.ts) / env usage).
-4. **SQLite path:** `WC_SQLITE_PATH` resolves to a directory that exists on the volume and remains writable after deploy.
+4. **SQLite path:** `WC_SQLITE_PATH` resolves to a SQLite file whose **parent directory** exists on the volume and remains writable after deploy.
 5. **Feature env:** Any connector or AI feature enabled in production must have required secrets present **before** accepting traffic (Box JWT, OpenAI, etc. per [`.env.example`](../.env.example) and [`DEPLOY.md`](./DEPLOY.md)).
 
 ### Current ops surface (implemented)
@@ -55,6 +55,7 @@ These are **requirements**, not suggestions:
 - **`GET /health`** — Returns ok, service name, `startup_recovery` ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts)). Listed as load-balancer-safe in [`DEPLOY.md`](./DEPLOY.md).
 - **`GET /api/workers/ocr/health`** — Worker record, `stale` if heartbeat older than 45s ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts)). When `WC_API_KEY` is configured, this stays behind the normal bearer gate.
 - **`GET /api/ops/readiness`** — Operator snapshot of effective paths, writable state, last migration id, non-secret Box/OpenAI presence booleans, OCR heartbeat summary, and startup recovery ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts), [`readiness.ts`](../apps/api/src/readiness.ts)).
+- **`POST /api/ops/backups/snapshot`** — Authenticated operator snapshot route that writes a consistent SQLite backup plus copies exports/uploads into a manifest-backed snapshot directory ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts), [`backup.ts`](../apps/api/src/backup.ts)).
 
 ### Round 1 startup validation (implemented)
 
@@ -91,14 +92,16 @@ Startup logging now includes the effective SQLite path, export path, and whether
 
 ### Backups and restore
 
-**Planned official procedure** (to document and optionally automate):
+**Implemented operator snapshot path:**
 
-- **SQLite:** Copy main DB file **and** `-wal` / `-shm` consistently (SQLite backup semantics per ops best practice; see [`DEPLOY.md`](./DEPLOY.md) for volume guidance).
-- **Exports/artifacts:** Copy directories referenced by export and artifact configuration.
+- **Route:** **`POST /api/ops/backups/snapshot`** now creates an operator snapshot on disk.
+- **SQLite:** Uses `better-sqlite3`’s online backup API to write a standalone SQLite backup file ([`backup.ts`](../apps/api/src/backup.ts)).
+- **Exports/artifacts:** Copies package exports, exhibit exports, and matter uploads when those directories exist ([`backup.ts`](../apps/api/src/backup.ts), [`storage-paths.ts`](../apps/api/src/storage-paths.ts)).
+- **Manifest:** Writes `manifest.json` with source paths, backup paths, and per-directory copy summaries.
 
-Include a **restore drill** in docs: verify file permissions, run migration state, spot-check OCR queue and package runs.
+**Manual fallback path:** Stop the service and copy the SQLite file plus `-wal` / `-shm` and the same artifact/upload directories as described in [`DEPLOY.md`](./DEPLOY.md).
 
-**Optional:** Safe snapshot CLI or authenticated operator route for coordinated SQLite + artifact copy (planned; not present as of this brief).
+**Restore drill:** Documented in [`DEPLOY.md`](./DEPLOY.md); still requires operator execution on a non-production clone.
 
 ### Named runbooks (must exist in [`DEPLOY.md`](./DEPLOY.md) / operator docs)
 
@@ -112,7 +115,7 @@ Include a **restore drill** in docs: verify file permissions, run migration stat
 
 ### Remaining gap note
 
-[`DEPLOY.md`](./DEPLOY.md) and [`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts) now cover the basic hosted readiness contract. The remaining hosted-ops gap is not “invent readiness,” but to finish backup/restore procedure, restore drills, and named operator runbooks.
+[`DEPLOY.md`](./DEPLOY.md), [`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts), and [`backup.ts`](../apps/api/src/backup.ts) now cover the basic hosted durability contract. The remaining hosted-ops gap is to **execute** a restore drill in a real non-prod environment and lock down ownership/retention for snapshots.
 
 ---
 
@@ -255,7 +258,7 @@ Projection data for many of these concepts already exists in the API projection 
 | Wave | Focus |
 | --- | --- |
 | **0** | Doc + checklist lock (this brief + [`HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md`](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md)); align [`DEPLOY.md`](./DEPLOY.md) with readiness gates. |
-| **1** | Hosted readiness follow-through: backup/restore procedure, restore drills, and runbooks. Startup validation and **`GET /api/ops/readiness`** are already implemented on `main`. |
+| **1** | Hosted readiness follow-through: execute a real restore drill, confirm backup retention/ownership, and lock the reference environment. Startup validation, **`GET /api/ops/readiness`**, backup snapshots, and operator runbooks are already implemented on `main`. |
 | **2** | Auth: session cookies, `request.user`, actor stamping, route guards, remove shared browser key from normal hosted use. |
 | **3** | Blueprints: `blueprints` + `blueprint_versions`, wire three package types, migrate prompts/retrieval references incrementally. |
 | **4** | Matter operating console: evolve `CaseOverviewPage` toward the six-panel contract. |
@@ -274,6 +277,7 @@ Projection data for many of these concepts already exists in the API projection 
 | `start:railway` blessed | [`package.json`](../package.json), [`start-railway.ts`](../apps/api/src/start-railway.ts) |
 | Ops health endpoints | [`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts) |
 | Startup path validation + readiness snapshot | [`readiness.ts`](../apps/api/src/readiness.ts), [`server.ts`](../apps/api/src/server.ts) |
+| Backup snapshot route + storage copy contract | [`backup.ts`](../apps/api/src/backup.ts), [`storage-paths.ts`](../apps/api/src/storage-paths.ts), [`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts) |
 | Shared API key auth | [`config.ts`](../apps/desktop/src/config.ts), [`server.ts`](../apps/api/src/server.ts) |
 | `x-wc-actor` on approve | [`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts) |
 | Dual AI paths | [`ai-service.ts`](../apps/api/src/ai-service.ts), [`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`CaseAIPage.tsx`](../apps/desktop/src/pages/cases/CaseAIPage.tsx) |

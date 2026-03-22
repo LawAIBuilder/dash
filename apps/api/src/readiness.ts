@@ -1,10 +1,11 @@
 import type Database from "better-sqlite3";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { isAIConfigured } from "./ai-service.js";
 import { resolveBoxProviderConfig } from "./box-provider.js";
 import { getLastAppliedMigrationId, resolveDatabasePath } from "./db.js";
+import { resolvePackageExportDirInfo } from "./storage-paths.js";
 import { getWorkerHealthSummary, probeWorkerHeartbeatWrite } from "./worker-health.js";
 
 export interface EffectivePaths {
@@ -32,17 +33,10 @@ export interface StartupValidationResult {
 }
 
 function resolveExportDir() {
-  const configured = process.env.WC_EXPORT_DIR?.trim();
-  if (configured) {
-    return {
-      exportDir: configured,
-      exportDirConfigured: true
-    };
-  }
-
+  const resolved = resolvePackageExportDirInfo();
   return {
-    exportDir: join(process.cwd(), "data", "exports"),
-    exportDirConfigured: false
+    exportDir: resolved.path,
+    exportDirConfigured: resolved.configured
   };
 }
 

@@ -1,9 +1,10 @@
 import type Database from "better-sqlite3";
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { PDFDocument, type PDFFont, type PDFPage, rgb, StandardFonts } from "pdf-lib";
 import { randomUUID } from "node:crypto";
 import { toSafeFilesystemSegment } from "./fs-safety.js";
+import { resolveExhibitExportDir } from "./storage-paths.js";
 
 export const PACKET_PDF_MANIFEST_VERSION = 2 as const;
 
@@ -123,18 +124,6 @@ export type PacketPdfManifestV1 = {
   pages: PacketPdfPageEntry[];
   item_errors: Array<{ exhibit_item_id: string; message: string }>;
 };
-
-function resolveExportBaseDir() {
-  const fromEnv = process.env.WC_EXHIBIT_EXPORT_DIR?.trim();
-  if (fromEnv) {
-    return resolve(fromEnv);
-  }
-  const dbPath = process.env.WC_SQLITE_PATH?.trim();
-  if (dbPath) {
-    return join(dirname(resolve(dbPath)), "exhibit_exports");
-  }
-  return resolve(process.cwd(), "apps/api/data/exhibit_exports");
-}
 
 type OrderedExhibitItemRow = {
   exhibit_item_id: string;
@@ -759,7 +748,7 @@ export function listPacketExportsForPacket(db: Database.Database, packetId: stri
 }
 
 export function resolveExportAbsolutePath(relativePath: string) {
-  return join(resolveExportBaseDir(), relativePath);
+  return join(resolveExhibitExportDir(), relativePath);
 }
 
 /** Allowed packet statuses for PDF export (post-finalize workflow). */
@@ -788,7 +777,7 @@ export async function runPacketPdfExport(
   }
 
   const exportId = randomUUID();
-  const baseDir = resolveExportBaseDir();
+  const baseDir = resolveExhibitExportDir();
   const caseDirSegment = toSafeFilesystemSegment(packet.case_id, "case");
   const caseDir = join(baseDir, caseDirSegment);
   await mkdir(caseDir, { recursive: true });

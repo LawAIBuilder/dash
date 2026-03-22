@@ -31,6 +31,7 @@ import {
   getFullCanonicalTextForSourceItemInCase,
   getPageChunksInCase
 } from "../retrieval.js";
+import { resolvePackageExportDir } from "../storage-paths.js";
 import type { CaseRouteReply, HeaderRouteReply } from "./types.js";
 
 export interface RegisterPackageWorkbenchRoutesInput {
@@ -59,12 +60,6 @@ export interface RegisterPackageWorkbenchRoutesInput {
     reply: HeaderRouteReply,
     bucket: string
   ) => boolean;
-}
-
-function resolvePackageExportDir() {
-  const env = process.env.WC_EXPORT_DIR?.trim();
-  if (env) return env;
-  return join(process.cwd(), "data", "exports");
 }
 
 export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRoutesInput) {
