@@ -148,3 +148,4 @@ and point `VITE_API_BASE_URL` at the public origin.
 
 - [DOGFOOD.md](./DOGFOOD.md)
 - [DEPLOY.md](./DEPLOY.md)
+- [HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md)

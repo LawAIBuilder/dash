@@ -77,3 +77,4 @@ Production sync is still **stubbed**; use dev hydrate or see `pp-provider.ts` / 
 
 - [DOGFOOD.md](./DOGFOOD.md) — local runbook and desktop env.
 - [OCR_NOTES.md](./OCR_NOTES.md) — pdfjs / Tesseract notes.
+- [HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md) — recommended product-mode decision and phased hosted-web plan.
