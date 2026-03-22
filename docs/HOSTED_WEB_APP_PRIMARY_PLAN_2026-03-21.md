@@ -16,6 +16,12 @@ The current recommendation is:
 
 This plan is grounded in the current repo, not a hypothetical rebuild.
 
+## Related Docs
+
+- Implementation packet: [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md)
+- Hosted Phase 1 backlog: [HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md)
+- Mailroom status and deferral rationale: [MAILROOM_VISION_AND_SOURCES_2026-03-21.md](./MAILROOM_VISION_AND_SOURCES_2026-03-21.md)
+
 ## Current Reality
 
 Today the stack is already a web app in technical shape:

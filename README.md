@@ -4,9 +4,11 @@ Monorepo for a **workers’ comp hearing-prep / matter-intelligence** stack: aut
 
 ## Documentation
 
+- **[docs/FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](docs/FOUNDATION_EXECUTION_BRIEF_2026-03-21.md)** — Canonical execution packet for hosted readiness, auth migration, blueprint canonicalization, matter operating console, and legacy AI deprecation.
 - **[docs/ROADMAP.md](docs/ROADMAP.md)** — Architecture, code map, test surface, milestones (M1–M3), phased roadmap, non-goals.
 - **[docs/DOGFOOD.md](docs/DOGFOOD.md)** — Operator runbook: env, start servers, case + Box folder, desktop Sync / Normalize / OCR queue.
 - **[docs/DEPLOY.md](docs/DEPLOY.md)** — Deploy notes: SQLite volume, API + OCR worker processes, `WC_API_HOST`, CORS, API key.
+- **[docs/MAILROOM_VISION_AND_SOURCES_2026-03-21.md](docs/MAILROOM_VISION_AND_SOURCES_2026-03-21.md)** — **Canonical mailroom doc:** vision + planning sources + what exists in code (Box/PP hooks, Railway, correspondence rules); mailroom product remains a **later orchestration wave**.
 - **Cursor:** open the plan **WC Legal Prep Roadmap** from the repo’s [`.cursor/plans/wc_legal_prep_roadmap.plan.md`](.cursor/plans/wc_legal_prep_roadmap.plan.md) for trackable todos.
 
 ## Quick start
