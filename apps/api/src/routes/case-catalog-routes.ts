@@ -1,11 +1,12 @@
 import type Database from "better-sqlite3";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   backfillCaseMembershipsForCase,
   deleteCaseMembership,
   ensureCaseMembership,
   listCaseMemberships,
   parseUserRole,
+  requireCaseAccess,
   requireAuthenticatedUser,
   setCaseMembershipRole
 } from "../auth.js";
@@ -58,54 +59,86 @@ function readCaseRow(db: Database.Database, caseId: string) {
 export function registerCaseCatalogRoutes(input: RegisterCaseCatalogRoutesInput) {
   const { app, db, assertCaseExists, ensureCaseScaffold } = input;
 
-  app.get("/api/cases", async () => {
-    const cases = db
+  function requireCatalogCaseAccess(request: FastifyRequest, reply: FastifyReply, caseId: string) {
+    if (!assertCaseExists(caseId, reply)) {
+      return null;
+    }
+    return requireCaseAccess(db, request, reply, caseId);
+  }
+
+  function listVisibleCases(request: FastifyRequest) {
+    const baseQuery = `
+      SELECT
+        c.id,
+        c.name,
+        c.case_type,
+        c.status,
+        c.employee_name,
+        c.employer_name,
+        c.insurer_name,
+        c.hearing_date,
+        c.pp_matter_id,
+        c.box_root_folder_id,
+        c.created_at,
+        c.updated_at,
+        COALESCE(conn.status, 'inactive') AS box_connection_status,
+        COALESCE(sync.latest_sync_status, 'not_synced') AS latest_sync_status,
+        COALESCE(inv.source_item_count, 0) AS source_item_count
+      FROM cases c
+      LEFT JOIN (
+        SELECT si.case_id, COUNT(*) AS source_item_count
+        FROM source_items si
+        GROUP BY si.case_id
+      ) inv ON inv.case_id = c.id
+      LEFT JOIN (
+        SELECT
+          sr.case_id,
+          sc.status,
+          ROW_NUMBER() OVER (PARTITION BY sr.case_id ORDER BY sr.started_at DESC) AS rn
+        FROM sync_runs sr
+        JOIN source_connections sc ON sc.id = sr.source_connection_id
+        WHERE sc.provider = 'box'
+      ) conn ON conn.case_id = c.id AND conn.rn = 1
+      LEFT JOIN (
+        SELECT
+          sr.case_id,
+          sr.status AS latest_sync_status,
+          ROW_NUMBER() OVER (PARTITION BY sr.case_id ORDER BY sr.started_at DESC) AS rn
+        FROM sync_runs sr
+        JOIN source_connections sc ON sc.id = sr.source_connection_id
+        WHERE sc.provider = 'box'
+      ) sync ON sync.case_id = c.id AND sync.rn = 1
+    `;
+
+    if (request.user && request.user.role !== "admin") {
+      return db
+        .prepare(
+          `
+            ${baseQuery}
+            WHERE EXISTS (
+              SELECT 1
+              FROM case_memberships cm
+              WHERE cm.case_id = c.id
+                AND cm.user_id = ?
+            )
+            ORDER BY COALESCE(c.updated_at, c.created_at) DESC
+          `
+        )
+        .all(request.user.id);
+    }
+
+    return db
       .prepare(
         `
-          SELECT
-            c.id,
-            c.name,
-            c.case_type,
-            c.status,
-            c.employee_name,
-            c.employer_name,
-            c.insurer_name,
-            c.hearing_date,
-            c.pp_matter_id,
-            c.box_root_folder_id,
-            c.created_at,
-            c.updated_at,
-            COALESCE(conn.status, 'inactive') AS box_connection_status,
-            COALESCE(sync.latest_sync_status, 'not_synced') AS latest_sync_status,
-            COALESCE(inv.source_item_count, 0) AS source_item_count
-          FROM cases c
-          LEFT JOIN (
-            SELECT si.case_id, COUNT(*) AS source_item_count
-            FROM source_items si
-            GROUP BY si.case_id
-          ) inv ON inv.case_id = c.id
-          LEFT JOIN (
-            SELECT
-              sr.case_id,
-              sc.status,
-              ROW_NUMBER() OVER (PARTITION BY sr.case_id ORDER BY sr.started_at DESC) AS rn
-            FROM sync_runs sr
-            JOIN source_connections sc ON sc.id = sr.source_connection_id
-            WHERE sc.provider = 'box'
-          ) conn ON conn.case_id = c.id AND conn.rn = 1
-          LEFT JOIN (
-            SELECT
-              sr.case_id,
-              sr.status AS latest_sync_status,
-              ROW_NUMBER() OVER (PARTITION BY sr.case_id ORDER BY sr.started_at DESC) AS rn
-            FROM sync_runs sr
-            JOIN source_connections sc ON sc.id = sr.source_connection_id
-            WHERE sc.provider = 'box'
-          ) sync ON sync.case_id = c.id AND sync.rn = 1
+          ${baseQuery}
           ORDER BY COALESCE(c.updated_at, c.created_at) DESC
         `
       )
       .all();
+  }
+
+  app.get("/api/cases", async (request) => {
+    const cases = listVisibleCases(request);
 
     return { cases };
   });
@@ -177,7 +210,7 @@ export function registerCaseCatalogRoutes(input: RegisterCaseCatalogRoutesInput)
 
   app.get("/api/cases/:caseId", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireCatalogCaseAccess(request, reply, caseId)) {
       return;
     }
     return { ok: true, case: readCaseRow(db, caseId) ?? null };
@@ -278,7 +311,7 @@ export function registerCaseCatalogRoutes(input: RegisterCaseCatalogRoutesInput)
 
   app.patch("/api/cases/:caseId", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireCatalogCaseAccess(request, reply, caseId)) {
       return;
     }
 

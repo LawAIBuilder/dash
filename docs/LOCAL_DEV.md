@@ -68,7 +68,7 @@ If you are using browser session auth locally:
 
 - Do **not** set `VITE_WC_API_KEY`.
 - Use the server bootstrap admin env (`WC_BOOTSTRAP_ADMIN_EMAIL`, `WC_BOOTSTRAP_ADMIN_PASSWORD`) and sign in through the browser.
-- For the current Wave 2 authorization slice, create matters while signed in if you want a non-admin session user to have package/workbench and case-data access to that case immediately; case creation now seeds the creator's `case_memberships` row. Older cases can be backfilled from the admin case-access panel on the overview page.
+- For the current Wave 2 authorization slice, create matters while signed in if you want a non-admin session user to see that matter in the catalog and have package/workbench and case-data access immediately; case creation now seeds the creator's `case_memberships` row. Older cases can be backfilled from the admin case-access panel on the overview page.
 - Connector setup is stricter than matter work: tenant-level connector routes now require an admin session, while per-case sync/hydrate actions require case membership for non-admin session users.
 - Keep the hostnames aligned. A common local pairing is:
   - desktop on `http://localhost:5173`
