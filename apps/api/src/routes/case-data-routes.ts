@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
+import { requireCaseAccess } from "../auth.js";
 import { appendPageExtraction } from "../extraction.js";
 import { runCaseHeuristicExtractions } from "../extraction-runner.js";
 import { buildCaseProjection } from "../projection.js";
@@ -60,9 +61,14 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
     readSourceItemBinaryContext
   } = input;
 
+  function requireCaseDataAccess(request: FastifyRequest, reply: FastifyReply, caseId: string) {
+    if (!assertCaseExists(caseId, reply)) return null;
+    return requireCaseAccess(db, request, reply, caseId);
+  }
+
   app.get("/api/cases/:caseId/source-items/:sourceItemId/content", async (request, reply) => {
     const { caseId, sourceItemId } = request.params as { caseId: string; sourceItemId: string };
-    if (!assertCaseExists(caseId, reply as StreamingRouteReply)) return;
+    if (!requireCaseDataAccess(request, reply, caseId)) return;
     const sourceItem = readSourceItemBinaryContext(sourceItemId);
     if (!sourceItem || sourceItem.case_id !== caseId) {
       return reply.code(404).send({ ok: false, error: "source item not found" });
@@ -152,7 +158,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
   app.post("/api/cases/:caseId/source-items/:sourceItemId/classify", async (request, reply) => {
     const body = request.body as { filename?: string } | undefined;
     const { caseId, sourceItemId } = request.params as { caseId: string; sourceItemId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireCaseDataAccess(request, reply, caseId)) return;
     if (!assertSourceItemBelongsToCase(caseId, sourceItemId, reply)) return;
 
     const sourceItem = db
@@ -184,7 +190,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
           clear?: boolean;
         }
       | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireCaseDataAccess(request, reply, caseId)) return;
     if (!assertSourceItemBelongsToCase(caseId, sourceItemId, reply)) return;
 
     const sourceItem = db
@@ -325,7 +331,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
       | undefined;
     const { caseId } = request.params as { caseId: string };
 
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireCaseDataAccess(request, reply, caseId)) {
       return;
     }
     if (body?.source_item_ids && body.source_item_ids.length > 1000) {
@@ -341,7 +347,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
 
   app.get("/api/cases/:caseId/review-queue", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireCaseDataAccess(request, reply, caseId)) {
       return;
     }
 
@@ -438,7 +444,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
       | undefined;
     const { caseId } = request.params as { caseId: string };
 
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireCaseDataAccess(request, reply, caseId)) {
       return;
     }
     if (body?.canonical_page_ids && body.canonical_page_ids.length > 1000) {
@@ -461,7 +467,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
     const { caseId } = request.params as { caseId: string };
     const body = request.body as { skip_if_exists?: boolean } | undefined;
 
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireCaseDataAccess(request, reply, caseId)) {
       return;
     }
 
@@ -478,7 +484,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
   app.post("/api/cases/:caseId/canonical-pages/:canonicalPageId/ocr-review/resolve", async (request, reply) => {
     const { caseId, canonicalPageId } = request.params as { caseId: string; canonicalPageId: string };
     const body = request.body as { accept_empty?: boolean; resolution_note?: string | null } | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireCaseDataAccess(request, reply, caseId)) return;
     if (!assertCanonicalPageBelongsToCase(caseId, canonicalPageId, reply)) return;
 
     const result = db.transaction(() =>
@@ -508,7 +514,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
         }
       | undefined;
     const { caseId, canonicalPageId } = request.params as { caseId: string; canonicalPageId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireCaseDataAccess(request, reply, caseId)) return;
     if (!assertCanonicalPageBelongsToCase(caseId, canonicalPageId, reply)) return;
 
     if (!body?.engine || !body?.status) {
@@ -546,7 +552,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
         }
       | undefined;
     const { caseId, canonicalPageId } = request.params as { caseId: string; canonicalPageId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireCaseDataAccess(request, reply, caseId)) return;
     if (!assertCanonicalPageBelongsToCase(caseId, canonicalPageId, reply)) return;
 
     if (!body?.schema_key?.trim() || !body?.extractor_version?.trim() || !body?.payload || typeof body.payload !== "object") {
@@ -573,6 +579,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
 
   app.get("/api/cases/:caseId/projection", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
+    if (!requireCaseDataAccess(request, reply, caseId)) return;
     const projection = buildCaseProjection(db, caseId);
     if (!projection) {
       return reply.code(404).send({ ok: false, error: "case not found" });
@@ -583,7 +590,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
 
   app.post("/api/cases/:caseId/regression-checks", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireCaseDataAccess(request, reply, caseId)) return;
     const body = request.body as
       | {
           check_type?: string;
@@ -618,7 +625,7 @@ export function registerCaseDataRoutes(input: RegisterCaseDataRoutesInput) {
 
   app.post("/api/cases/:caseId/run-manifests", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireCaseDataAccess(request, reply, caseId)) return;
     const body = request.body as
       | {
           product_preset_id?: string | null;
