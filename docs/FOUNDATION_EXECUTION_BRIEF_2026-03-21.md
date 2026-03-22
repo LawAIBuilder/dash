@@ -1,403 +1,284 @@
-# Foundation Execution Brief - 2026-03-21
+# Foundation execution brief — 2026-03-21
 
-This brief is the **authoritative execution packet** for the next implementation waves in `wc-legal-prep`. It is written for implementers. It is not another strategy brainstorm.
+**This document is the authoritative execution packet for implementers.** It freezes architectural debate and turns repo-grounded conclusions into requirements. It is not a strategy memo: do not reopen forks that are settled here without new evidence from code or production.
 
-Current repo truth: the product is already a **browser SPA + Fastify API + OCR worker + SQLite** internal legal workbench, with the browser in [apps/desktop](../apps/desktop), the API in [apps/api/src/server.ts](../apps/api/src/server.ts), the OCR worker in [apps/api/src/ocr-worker-service.ts](../apps/api/src/ocr-worker-service.ts), the shared runtime in [apps/api/src/db.ts](../apps/api/src/db.ts), and the hosted supervisor path in [apps/api/src/start-railway.ts](../apps/api/src/start-railway.ts).
+**Current repo truth (verified):** The product is already a **browser SPA** ([`apps/desktop`](../apps/desktop)), a **Fastify API** ([`apps/api/src/server.ts`](../apps/api/src/server.ts)), an **OCR worker** process ([`apps/api/src/ocr-worker-service.ts`](../apps/api/src/ocr-worker-service.ts)), **SQLite** via `better-sqlite3` ([`apps/api/src/db.ts`](../apps/api/src/db.ts)), and a **hosted supervisor** entrypoint ([`apps/api/src/start-railway.ts`](../apps/api/src/start-railway.ts), invoked from root [`package.json`](../package.json) as `start:railway`). Anything described below as **planned** is not implemented until merged code and tests exist.
 
-## 1. Executive decision freeze
+**Settled constraints (non-negotiable in this brief):**
 
-The following decisions are settled for the next implementation waves:
+- Hosted **internal web** is the primary product mode; local two-process dev remains operator/dev mode.
+- **`npm run start:railway`** (root) is the blessed hosted entrypoint; it must remain the single blessed production path unless deliberately replaced with an equivalent documented wrapper.
+- **Package worker** execution ([`runPackageWorker`](../apps/api/src/ai-service.ts) + package workbench routes) is the **canonical** execution engine for new product work.
+- **Mailroom** is **later orchestrated intake**, not primary information architecture in this phase ([`MAILROOM_VISION_AND_SOURCES_2026-03-21.md`](./MAILROOM_VISION_AND_SOURCES_2026-03-21.md)).
+- **SQLite on a persistent volume** is acceptable for Phase 1; do not treat Postgres migration as a prerequisite for hosted internal web without proving SQLite is the blocker.
+- **Desktop packages** and package-studio specs remain the **golden/reference contract** surface ([`docs/package-studio/README.md`](./package-studio/README.md)).
+- **Vector-first retrieval** and **public multi-tenant SaaS** are out of scope for this brief. **Electron/Tauri** packaging is deferred.
 
-- `wc-legal-prep` remains the foundation repo.
-- Hosted internal web remains the primary product mode, as established in [HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md).
-- Root `npm run start:railway` from [package.json](../package.json) is the blessed hosted server entrypoint.
-- The package worker path is the canonical execution engine for new product work, grounded in [apps/api/src/routes/package-workbench-routes.ts](../apps/api/src/routes/package-workbench-routes.ts) and [apps/api/src/ai-service.ts](../apps/api/src/ai-service.ts).
-- Desktop packages remain the product contract and golden/reference set, as stated in [package-studio/README.md](./package-studio/README.md).
-- Mailroom remains a later orchestrated intake wave, not the current product center, as documented in [MAILROOM_VISION_AND_SOURCES_2026-03-21.md](./MAILROOM_VISION_AND_SOURCES_2026-03-21.md).
-- SQLite on a persistent volume remains acceptable for Phase 1 unless runtime evidence proves otherwise.
-- Electron, packaged local launcher work, public multi-tenant SaaS, Postgres-first migration, and vector-first retrieval are out of scope for this brief.
+**Related execution queue:** Phase 1 hosted backlog items **HST-01–HST-17** live in [`HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md`](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md). This brief defines *what* must be true; that backlog tracks *ticket-level* work.
 
-Implementation rule:
+---
 
-- From this point forward, execution planning should optimize for **one canonical hosted path, one canonical auth model, one canonical package definition model, and one canonical execution engine**.
+## Executive decision freeze
 
-## 2. Hosted readiness contract
+| Topic | Decision |
+| --- | --- |
+| Product mode | Hosted internal web first ([`HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md`](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md)). |
+| Hosted process model | API + OCR worker supervised from one deployment path (`start:railway` → [`start-railway.ts`](../apps/api/src/start-railway.ts)). |
+| Execution engine | Package worker path canonical; legacy event-config assembly is compatibility-only (see [Legacy AI freeze](#legacy-ai-freeze-and-deprecation)). |
+| Datastore | SQLite + volumes for Phase 1 ([`db.ts`](../apps/api/src/db.ts), [`DEPLOY.md`](./DEPLOY.md)). |
+| Intelligence posture | Structured spine, retrieval discipline, exemplars, provenance before vector or fine-tuning ([`INTELLIGENCE_SPINE_AND_CORPUS_VISION_2026-03-21.md`](./INTELLIGENCE_SPINE_AND_CORPUS_VISION_2026-03-21.md)). |
+| Mailroom | Documented as future orchestration; not the next foundation wave ([mailroom canonical doc](./MAILROOM_VISION_AND_SOURCES_2026-03-21.md)). |
 
-### Current grounding
+---
 
-- Hosted server supervisor path already exists in [apps/api/src/start-railway.ts](../apps/api/src/start-railway.ts).
-- Root hosted entrypoint already exists as `start:railway` in [package.json](../package.json).
-- Shared SQLite runtime and migration application already exist in [apps/api/src/db.ts](../apps/api/src/db.ts).
-- Current health routes exist in [apps/api/src/routes/ops-routes.ts](../apps/api/src/routes/ops-routes.ts).
-- Current hosted guidance exists in [DEPLOY.md](./DEPLOY.md), but it is not yet a complete hosted-production readiness contract.
+## Hosted readiness contract
 
 ### Official hosted runtime
 
-- The official hosted server runtime is **root `npm run start:railway`**, which runs `apps/api/dist/start-railway.js`.
-- That supervisor remains responsible for launching and supervising:
-  - `apps/api/dist/server.js`
-  - `apps/api/dist/ocr-worker-service.js`
-- The browser remains separately built from `apps/desktop/dist` and hosted as the client surface for the same environment.
+- **Entry:** Root script **`npm run start:railway`** → builds and runs **`apps/api/dist/start-railway.js`** (see [`package.json`](../package.json) `start:railway`).
+- **Supervision:** [`start-railway.ts`](../apps/api/src/start-railway.ts) owns starting the API and (when configured) the OCR worker in one deployment unit.
+- **Persistence:** `WC_SQLITE_PATH` must point at a **mounted persistent volume**, not ephemeral container disk ([`.env.example`](../.env.example), [`DEPLOY.md`](./DEPLOY.md)).
+- **Exports/artifacts:** Any directory intended to survive deploys (e.g. `WC_EXPORT_DIR` and related paths per [`DEPLOY.md`](./DEPLOY.md)) must use **persistent storage** when exports must be retained across releases.
 
-### Must-pass hosted readiness gates
+### Pass/fail readiness gates (operator contract)
 
-Before an environment is considered hosted-ready, all of the following must be true:
+These are **requirements**, not suggestions:
 
-- `npm run build` produces:
-  - `apps/api/dist/server.js`
-  - `apps/api/dist/ocr-worker-service.js`
-  - `apps/api/dist/start-railway.js`
-  - `apps/desktop/dist`
-- `WC_API_HOST=0.0.0.0` is set in hosted environments.
-- `PORT` is supplied by the platform or explicitly configured.
-- `WC_SQLITE_PATH` points to a mounted persistent volume, not ephemeral disk.
-- Export and artifact directories are on persistent storage if their outputs are expected to survive deploys.
-- Required feature env vars are present before startup:
-  - `WC_API_KEY` during the auth transition window only
-  - `OPENAI_API_KEY` when package worker or AI assembly is expected
-  - Box env when Box sync or Box-backed file work is expected
-  - `WC_SOURCE_CONNECTION_SECRET` for connector metadata protection
-- `WC_ENABLE_DEV_ROUTES` is unset or disabled in hosted environments.
+1. **Build artifacts:** Production build must produce at minimum: `apps/api/dist/server.js`, `apps/api/dist/ocr-worker-service.js`, `apps/api/dist/start-railway.js` (verify via `npm run build` and listing `apps/api/dist/`).
+2. **Binding:** Hosted environments set **`WC_API_HOST=0.0.0.0`** so the API listens on all interfaces ([`DEPLOY.md`](./DEPLOY.md)).
+3. **`PORT`:** Platform-provided or explicitly set; API must read `PORT` as today ([`server.ts`](../apps/api/src/server.ts) / env usage).
+4. **SQLite path:** `WC_SQLITE_PATH` resolves to a directory that exists on the volume and remains writable after deploy.
+5. **Feature env:** Any connector or AI feature enabled in production must have required secrets present **before** accepting traffic (Box JWT, OpenAI, etc. per [`.env.example`](../.env.example) and [`DEPLOY.md`](./DEPLOY.md)).
 
-### Startup validation to implement
+### Current ops surface (implemented)
 
-Hosted startup should become fail-fast and explicit:
+- **`GET /health`** — Returns ok, service name, `startup_recovery` ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts)). Listed as load-balancer-safe in [`DEPLOY.md`](./DEPLOY.md).
+- **`GET /api/workers/ocr/health`** — Worker record, `stale` if heartbeat older than 45s ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts)).
 
-- Fail startup if the `WC_SQLITE_PATH` parent directory is missing or not writable.
-- Fail startup if configured export/artifact directories are missing or not writable.
-- Log the effective db path, export path, listen host, port, and whether the OCR worker is enabled.
-- Run a startup self-check that verifies:
-  - migrations applied successfully
-  - db writeability
-  - worker-heartbeat writeability
-  - export-directory writeability
+### Planned startup validation (to implement)
 
-### Health and ops contract
+On API boot, **fail fast** (non-zero exit) when:
 
-Keep the current lightweight health surface:
+- The directory for `WC_SQLITE_PATH` is missing or not writable.
+- Export/artifact directory is configured but not writable.
 
-- `GET /health` stays load-balancer-safe.
-- `GET /api/workers/ocr/health` stays as the worker-specific operator check.
+On startup, **log** at minimum: effective DB path, export path (if any), bind host/port, whether OCR worker subprocess is enabled.
 
-Add one new hosted readiness route:
+Run a **startup self-check** that verifies: migrations applied, DB writable, worker heartbeat storage writable (if worker enabled), export dir writable (if configured). (DB migrations and worker health patterns exist in [`db.ts`](../apps/api/src/db.ts) and [`worker-health`](../apps/api/src/worker-health.ts); wiring a single gate is **planned**.)
 
-- `GET /api/ops/readiness`
+### Planned consolidated readiness endpoint
 
-Its response contract should report:
+**`GET /api/ops/readiness`** (planned) — Single JSON contract for operators, distinct from **`/health`**:
 
-- db path
-- db writable yes/no
-- export dir writable yes/no
-- worker stale yes/no
-- last migration id
-- OpenAI configured yes/no
-- Box configured yes/no
-- startup recovery summary
+| Field / concern | Intent |
+| --- | --- |
+| `db_path` | Effective SQLite path |
+| `db_writable` | Boolean |
+| `export_dir_writable` | Boolean (or `null` if no export dir) |
+| `ocr_worker_stale` | Align with `/api/workers/ocr/health` semantics |
+| `last_migration_id` | Or equivalent schema version marker |
+| `openai_configured` | Non-secret boolean |
+| `box_configured` | Non-secret boolean |
+| `startup_recovery` | Pass-through from existing recovery summary ([`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts)) |
 
-This route is planned work. It does **not** exist yet in the repo.
+**Security:** This endpoint must not leak secrets; it may be restricted to same trust boundary as other authenticated routes once auth lands.
 
-### Backup, restore, and runbooks
+### Backups and restore
 
-Hosted operation is not considered complete until one official procedure is written and then followed for:
+**Planned official procedure** (to document and optionally automate):
 
-- SQLite database file
-- `-wal`
-- `-shm`
-- export directories
-- artifact directories
+- **SQLite:** Copy main DB file **and** `-wal` / `-shm` consistently (SQLite backup semantics per ops best practice; see [`DEPLOY.md`](./DEPLOY.md) for volume guidance).
+- **Exports/artifacts:** Copy directories referenced by export and artifact configuration.
 
-The hosted runbook set must include:
+Include a **restore drill** in docs: verify file permissions, run migration state, spot-check OCR queue and package runs.
 
-- first deploy
-- restart after failed migration
-- worker stale / OCR backlog rising
-- disk full / volume mount missing
-- restore from backup
-- API-key rotation while shared-key fallback still exists
+**Optional:** Safe snapshot CLI or authenticated operator route for coordinated SQLite + artifact copy (planned; not present as of this brief).
 
-Implementation rule:
+### Named runbooks (must exist in [`DEPLOY.md`](./DEPLOY.md) / operator docs)
 
-- Backup notes alone are not sufficient. The hosted docs must include a restore drill and expected recovery checks.
+1. First deploy  
+2. Restart after failed migration  
+3. Stale OCR worker / backlog rising  
+4. Missing volume / wrong mount  
+5. Disk full  
+6. Restore from backup  
+7. Rotate **`WC_API_KEY`** during auth transition (shared secret still in use today)
 
-## 3. Auth and principal migration
+### Gap note
 
-### Current grounding
+[`DEPLOY.md`](./DEPLOY.md) explains pieces, but a **single checklist** and **readiness contract** matching the gates above must stay aligned with code as it ships. [`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts) is useful but **shallow** for “internal default product” until `/api/ops/readiness` and startup validation exist.
 
-- Browser shared-key auth is wired in [apps/desktop/src/config.ts](../apps/desktop/src/config.ts) through `VITE_WC_API_KEY`.
-- API bearer trust is enforced in [apps/api/src/server.ts](../apps/api/src/server.ts) through `WC_API_KEY`.
-- Package approval attribution currently falls back to `x-wc-actor` in [apps/api/src/routes/package-workbench-routes.ts](../apps/api/src/routes/package-workbench-routes.ts).
-- Package run approval data already exists in `package_runs` in [apps/api/src/schema.ts](../apps/api/src/schema.ts) and [apps/api/src/ai-service.ts](../apps/api/src/ai-service.ts), but it is not yet tied to authenticated principals.
+---
 
-### Default hosted auth target
+## Auth and principal migration
 
-The default hosted browser auth path is:
+### Current truth (implemented)
 
-- server-authenticated principal-based auth
-- HTTP-only session-cookie auth for the browser
+- **Browser → API:** Shared bearer from `VITE_WC_API_KEY` in [`apps/desktop/src/config.ts`](../apps/desktop/src/config.ts), sent as `Authorization: Bearer …` via [`api-client.ts`](../apps/desktop/src/lib/api-client.ts).
+- **API trust:** Server validates `WC_API_KEY` ([`server.ts`](../apps/api/src/server.ts)); this is a **single shared secret**, not per-user identity.
+- **Approval attribution:** Package run approve reads optional header **`x-wc-actor`** and passes string to `approvePackageRun` ([`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts) lines 485–490). The desktop client does not establish a verified principal for this path today.
 
-JWT may be supported later as a future-compatible transport, but it is not the default browser contract for this brief.
+### Target architecture (planned)
 
-### Target model
+**Default hosted browser authentication:** **HTTP-only session cookie** issued by the API after login (same site / CSRF-safe patterns). **JWT** may exist later for alternate clients; it is **not** the default browser contract in this brief.
 
-Separate the following concerns explicitly:
+Introduce **`request.user`** (or equivalent Fastify-typed principal) on authenticated requests.
 
-- Authentication: who the user is
-- Authorization: what the user can do
-- Attribution: who performed each state-changing action
+### Schema and data model (planned)
 
-Planned interface and schema additions:
+| Construct | Purpose |
+| --- | --- |
+| `users` | Human principals |
+| Roles | At minimum: `operator`, `reviewer`, `approver`, `admin` (exact storage: enum column vs join table — implementer choice, but roles must be enforceable) |
+| `case_memberships` (or equivalent) | Case-scoped read/write/run/approve |
+| Actor columns | `created_by`, `updated_by`, `approved_by`, optional `acted_as_role` on state-changing records |
 
-- `request.user` principal on authenticated API requests
-- `users`
-- `case_memberships` or an equivalent case-permission table
-- actor fields such as `created_by`, `updated_by`, `approved_by`, and optional `acted_as_role`
+**Rule:** Approvals are **not** considered meaningful for governance until tied to **authenticated** user ids, not unverified headers.
 
-### Migration sequence
+### Migration sequence (locked)
 
-#### Phase A: principal plumbing
+| Phase | Content |
+| --- | --- |
+| **A** | Principal middleware; session login; keep **`WC_API_KEY`** / browser bearer only as **break-glass** or dev fallback. Stop preferring `x-wc-actor` when `request.user` exists. |
+| **B** | Actor stamping on all state-changing writes (approvals, package rules, uploads, connector actions, templates, exports). |
+| **C** | Route guards: case read/write, package run/approve, connector manage, ops/admin. |
+| **D** | Remove **`VITE_WC_API_KEY`** from normal hosted usage; retain server **`WC_API_KEY`** only for M2M or break-glass if absolutely required. |
 
-- Introduce auth middleware that resolves `request.user`.
-- Keep `WC_API_KEY` only as break-glass or dev fallback while browser auth is migrated.
-- Prefer authenticated principal identity over `x-wc-actor` whenever a principal exists.
+---
 
-#### Phase B: actor stamping
+## Blueprint canonicalization
 
-Stamp authenticated actor data on state-changing actions, including:
+### Intent
 
-- package approvals
-- package rule changes
-- event-config changes while legacy path still exists
-- uploads
-- connector actions
-- template edits
-- export and publish actions
+Introduce a **canonical package/playbook model** over existing machinery — **consolidation**, not a greenfield rewrite. Existing tables stay in place initially; first migrations add **ownership and versioning**, not destructive replacement.
 
-#### Phase C: permissions
+### Core concepts (planned)
 
-Add route guards for:
+| Concept | Definition |
+| --- | --- |
+| **`blueprints`** | Package **family** anchor (stable id, package type, human name). Maps from today’s product preset / package identity concepts. |
+| **`blueprint_versions`** | **Versioned execution contract** used by runs: prompts, retrieval profile, approval policy hooks, artifact expectations, evaluation hooks. |
 
-- case read
-- case write
-- package run
-- package approve
-- connector manage
-- ops and admin routes
+**Execution binding:** [`package_runs`](../apps/api/src/schema.ts) (and related) should reference **`blueprint_version_id`** (or equivalent) so every run is auditable as “this definition version.”
 
-#### Phase D: remove shared browser key as normal auth
+### Map from current structures
 
-- Remove `VITE_WC_API_KEY` from normal hosted browser usage.
-- Retain `WC_API_KEY` only for break-glass or machine-to-machine use if still necessary.
+| Current | Maps to |
+| --- | --- |
+| `product_presets` | Blueprint **family** anchor |
+| `product_rulepacks` | Default rules for a blueprint version |
+| `product_workflows` | Stage / workflow contract for a blueprint version |
+| `approval_gates` | Approval policy for a blueprint version |
+| `artifact_templates` | Artifact contract for a blueprint version |
+| `package_rules` | **Case-level overrides** against a locked blueprint version (not a second primary definition) |
+| Prompt branches in [`ai-service.ts`](../apps/api/src/ai-service.ts) | **`prompt_contract`** (versioned text/JSON) on `blueprint_versions` |
+| Retrieval behavior in [`retrieval.ts`](../apps/api/src/retrieval.ts) | **`retrieval_profile`** on `blueprint_versions` |
+| [`package_runs`](../apps/api/src/schema.ts) | **Executions** of a `blueprint_version` |
 
-Implementation rule:
+### Required fields on `blueprint_versions` (conceptual)
 
-- Approval is not considered meaningful until approval-bearing records are tied to authenticated principals rather than shared bearer access plus ad hoc headers.
+Package type, version string, status (`draft` | `active` | `deprecated`), execution engine (**`package_worker`**), default model, **output contract**, **retrieval profile**, **prompt contract**, **provenance policy**, **evaluation policy** (each may be JSON columns or normalized child tables — implementer choice with migration safety).
 
-## 4. Blueprint canonicalization
+### First canonicalization scope (frozen)
 
-### Current grounding
+Exactly **three** package types, end-to-end blueprint-backed:
 
-The package/playbook system is already real, but split across multiple constructs:
+1. Hearing prep  
+2. Claim petition  
+3. Discovery response  
 
-- `product_presets`
-- `product_rulepacks`
-- `product_workflows`
-- `approval_gates`
-- `artifact_templates`
-- `branch_templates`
-- `branch_transitions`
-- `branch_stage_requirements`
-- `branch_sla_targets`
-- `package_rules`
-- prompt logic in [apps/api/src/ai-service.ts](../apps/api/src/ai-service.ts)
-- retrieval assembly in [apps/api/src/retrieval.ts](../apps/api/src/retrieval.ts)
+No expansion until those three are stable in production.
 
-This is enough machinery to behave like blueprint definitions already. What is missing is canonical ownership, versioning, and inspectability.
+---
 
-### Canonical model
+## Matter operating console
 
-Introduce **Blueprint** as the top-level package/playbook abstraction.
+### Direction (frozen)
 
-Two core concepts are required:
+- **Matter-centric** IA: the **case overview** route evolves into the **primary operating console** — [`CaseOverviewPage.tsx`](../apps/desktop/src/pages/cases/CaseOverviewPage.tsx). Do **not** add a separate top-level “console” product shell in this wave.
+- **Mailroom** (when built) **feeds** this console; it does not compete as a co-equal home base ([mailroom doc](./MAILROOM_VISION_AND_SOURCES_2026-03-21.md)).
 
-- `blueprints`: package family anchors
-- `blueprint_versions`: the versioned execution contract actually used by runs
+### Five questions (every console view must answer)
 
-Each blueprint version should own the package definition for:
+1. Where is this matter **now**?  
+2. What is **blocked**?  
+3. What is **missing** (proof, docs, OCR)?  
+4. What should happen **next**?  
+5. What is awaiting **review or approval**?
 
-- package type
-- version
-- status
-- execution engine
-- default model
-- output contract
-- retrieval profile
-- prompt contract
-- provenance policy
-- evaluation policy
+### Six panels (layout contract)
 
-### Mapping from current structures
+1. **Matter header** — Identity, branch/stage, critical dates, source health, ownership roles, readiness.  
+2. **Next actions rail** — Urgent operational cards (proof gaps, stale sync, OCR backlog, drafts awaiting approval, export pending).  
+3. **Roadmap / stage progression** — Active branch, completed stages, blockers, SLA/age.  
+4. **Evidence and document readiness** — Proof gaps, key documents, correspondence/exhibits summary, OCR confidence flags.  
+5. **Package execution panel** — Available packages, last run, approval, exports, rerun, provenance warnings.  
+6. **Activity and audit panel** — Uploads, sync, branch events, approvals, exports.
 
-Canonical mapping rule:
+Projection data for many of these concepts already exists in the API projection path ([`runtime.ts`](../apps/api/src/runtime.ts), [`projection.ts`](../apps/api/src/projection.ts)); the gap is **product surfacing**, not invention from zero.
 
-- `product_presets` -> blueprint family anchor
-- `product_rulepacks` -> blueprint default rules
-- `product_workflows` -> blueprint stage contract
-- `approval_gates` -> blueprint approval policy
-- `artifact_templates` -> blueprint artifact contract
-- `package_rules` -> case-level overrides against a blueprint version
-- prompt branches in `ai-service.ts` -> blueprint prompt contract
-- retrieval behavior in `retrieval.ts` -> blueprint retrieval profile
-- `package_runs` -> execution history of blueprint versions
+---
 
-### Migration rule
+## Legacy AI freeze and deprecation
 
-Do not rewrite the current machinery all at once.
+### The split (current code)
 
-The first migration is about:
+| Legacy / compatibility | Canonical path |
+| --- | --- |
+| `ai_event_configs`, `ai_jobs`, [`runAIAssemblyJob`](../apps/api/src/ai-service.ts) | [`runPackageWorker`](../apps/api/src/ai-service.ts), package workbench routes, `package_runs`, approvals, exports |
+| [`CaseAIPage.tsx`](../apps/desktop/src/pages/cases/CaseAIPage.tsx) (event-config-driven UI) | Case packages / package workbench flows |
 
-- canonical ownership
-- versioning
-- inspection
-- binding package runs to blueprint versions
+**Decision:** **Package worker** is the **canonical execution engine** for all new product behavior.
 
-It is **not** about destructive table replacement in the first round.
+### Deprecation sequence (locked)
 
-### Initial canonicalization scope
+| Stage | Action |
+| --- | --- |
+| **1** | **Freeze** legacy path: no new event types, no new UX investment, no new prompt sophistication in `runAIAssemblyJob` except bugfixes. |
+| **2** | **Relabel** in UI and docs: “legacy / compatibility only.” |
+| **3** | **Parity:** For each active legacy use case, ship an equivalent **blueprint-backed** package path. |
+| **4** | **Restrict:** Disable **new** `ai_event_configs` creation; keep read-only history; limit rerun where unavoidable. |
+| **5** | **Retire** legacy creation from primary UI/API; retain historical rows and jobs for audit. |
 
-Only the following package types are in scope for the first blueprint-backed wave:
+**Governing rule:** **Migrate forward behavior first; history later.** New work uses package worker; old records remain visible.
 
-- hearing prep
-- claim petition
-- discovery response
+---
 
-Expansion should pause until the model holds for those three.
+## Ordered execution waves
 
-## 5. Matter operating console
+| Wave | Focus |
+| --- | --- |
+| **0** | Doc + checklist lock (this brief + [`HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md`](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md)); align [`DEPLOY.md`](./DEPLOY.md) with readiness gates. |
+| **1** | Hosted readiness: startup validation, **`GET /api/ops/readiness`**, backup/restore procedure, runbooks — implement HST items through backlog. |
+| **2** | Auth: session cookies, `request.user`, actor stamping, route guards, remove shared browser key from normal hosted use. |
+| **3** | Blueprints: `blueprints` + `blueprint_versions`, wire three package types, migrate prompts/retrieval references incrementally. |
+| **4** | Matter operating console: evolve `CaseOverviewPage` toward the six-panel contract. |
+| **5** | Legacy AI freeze stages 1–2 immediately in parallel where safe; stages 3–5 as parity completes. |
+| **6** | Mailroom orchestration ([canonical mailroom doc](./MAILROOM_VISION_AND_SOURCES_2026-03-21.md)) — after trust boundaries exist. |
 
-### Current grounding
+**Overlap allowed:** Waves **3** and **4** may overlap so the blueprint model is not “backend-only” for multiple releases.
 
-- The current matter overview already surfaces projection-backed case summary, proof requirements, source health, and activity in [apps/desktop/src/pages/cases/CaseOverviewPage.tsx](../apps/desktop/src/pages/cases/CaseOverviewPage.tsx).
-- The projection and branch/workflow model already exist in [apps/api/src/projection.ts](../apps/api/src/projection.ts), [apps/api/src/runtime.ts](../apps/api/src/runtime.ts), and [apps/api/src/schema.ts](../apps/api/src/schema.ts).
-- Mailroom remains explicitly later-stage orchestration in [MAILROOM_VISION_AND_SOURCES_2026-03-21.md](./MAILROOM_VISION_AND_SOURCES_2026-03-21.md).
+---
 
-### Direction freeze
+## Repo anchors (evidence index)
 
-- The UI direction is **matter-centric**, not mailroom-centric.
-- The current case overview path should evolve into the primary matter operating console.
-- This brief does **not** authorize building a separate co-equal mailroom product center.
+| Claim | Where |
+| --- | --- |
+| SPA + API + worker + SQLite | [`HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md`](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md), [`server.ts`](../apps/api/src/server.ts), [`db.ts`](../apps/api/src/db.ts) |
+| `start:railway` blessed | [`package.json`](../package.json), [`start-railway.ts`](../apps/api/src/start-railway.ts) |
+| Ops health endpoints | [`ops-routes.ts`](../apps/api/src/routes/ops-routes.ts) |
+| Shared API key auth | [`config.ts`](../apps/desktop/src/config.ts), [`server.ts`](../apps/api/src/server.ts) |
+| `x-wc-actor` on approve | [`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts) |
+| Dual AI paths | [`ai-service.ts`](../apps/api/src/ai-service.ts), [`package-workbench-routes.ts`](../apps/api/src/routes/package-workbench-routes.ts), [`CaseAIPage.tsx`](../apps/desktop/src/pages/cases/CaseAIPage.tsx) |
+| Case overview shell | [`CaseOverviewPage.tsx`](../apps/desktop/src/pages/cases/CaseOverviewPage.tsx), [`router.tsx`](../apps/desktop/src/router.tsx) |
 
-### The console must answer five questions
+---
 
-- Where is this matter now?
-- What is blocked?
-- What is missing?
-- What should happen next?
-- What is awaiting review or approval?
+## What this brief explicitly does not do
 
-### Primary console layout
+- It does not replace [`ROADMAP.md`](./ROADMAP.md) as a living backlog (that file is known to be partially stale; do not expand it in lieu of this brief).
+- It does not describe **implemented** behavior for items marked **planned** — verify in code before claiming done.
 
-The primary matter operating console should be organized into six panels:
+---
 
-- matter header
-- next actions rail
-- roadmap / stage progression
-- evidence and document readiness
-- package execution panel
-- activity and audit panel
-
-### Panel intent
-
-- Matter header: matter identity, active branch, current stage, major deadlines, source health, owner/reviewer/approver, readiness state.
-- Next actions rail: missing proof, stale source sync, OCR backlog, pending approval, export pending, recommended next package.
-- Roadmap / stage progression: active branch, completed stages, current stage, blockers, age in stage, transition conditions.
-- Evidence and document readiness: proof gaps, key documents present or missing, exhibit status, OCR or extraction confidence issues.
-- Package execution panel: available package definitions, most recent run, approval state, exports, rerun and revise controls, provenance warnings.
-- Activity and audit panel: uploads, sync events, branch events, approvals, exports, and operator actions.
-
-Implementation rule:
-
-- When mailroom exists later, it should feed this matter operating console rather than compete with it as a separate primary center of gravity.
-
-## 6. Legacy AI freeze and deprecation
-
-### Current grounding
-
-Legacy event-config AI remains present in:
-
-- `ai_event_configs`
-- `ai_jobs`
-- `runAIAssemblyJob` in [apps/api/src/ai-service.ts](../apps/api/src/ai-service.ts)
-- event-config routes in [apps/api/src/routes/package-workbench-routes.ts](../apps/api/src/routes/package-workbench-routes.ts)
-- the legacy UI in [apps/desktop/src/pages/cases/CaseAIPage.tsx](../apps/desktop/src/pages/cases/CaseAIPage.tsx)
-
-The canonical candidate is already present in:
-
-- `runPackageWorker` in [apps/api/src/ai-service.ts](../apps/api/src/ai-service.ts)
-- package workbench routes in [apps/api/src/routes/package-workbench-routes.ts](../apps/api/src/routes/package-workbench-routes.ts)
-- `package_runs`
-- approvals
-- exports
-- retrieval bundle discipline
-
-### Decision freeze
-
-- The package worker path is the canonical execution engine for new product work.
-- Legacy event-config AI is compatibility debt, not the future authoring model.
-
-### Deprecation sequence
-
-#### Stage 1: feature freeze legacy path
-
-- No new event types.
-- No new UX investment.
-- No new prompt sophistication in `runAIAssemblyJob`.
-- Only bug fixes.
-
-#### Stage 2: relabel legacy UI and docs
-
-- Mark legacy event-config AI as legacy or compatibility-only.
-- Make package worker language the forward-looking path in UI and docs.
-
-#### Stage 3: parity migration
-
-- Create blueprint-backed equivalents for the active legacy use cases that still matter operationally.
-
-#### Stage 4: route restriction
-
-- Disable creation of new `ai_event_configs`.
-- Keep read-only visibility for history.
-- Allow rerun only where unavoidable during the transition.
-
-#### Stage 5: retirement
-
-- Remove legacy authoring from the main UI.
-- Remove legacy creation routes from the primary API surface once replacements exist.
-- Preserve historical records for audit and analysis.
-
-Implementation rule:
-
-- Migrate forward behavior first. Do not try to migrate historical records before stopping new legacy authoring.
-
-## 7. Ordered execution waves
-
-Wave order for the next implementation rounds is:
-
-1. Hosted readiness contract
-2. Auth and principal plumbing
-3. Blueprint canonicalization for hearing prep, claim petition, and discovery response
-4. Matter operating console
-5. Legacy event-config freeze and deprecation
-6. Mailroom later as orchestrated intake
-
-Wave details:
-
-- Wave 1: harden hosted runtime, readiness checks, backup and restore, and operator runbooks.
-- Wave 2: land principal-based auth, actor attribution, and route permissions.
-- Wave 3: bind the canonical package definitions to blueprint versions and package runs.
-- Wave 4: elevate the case overview into the primary matter operating console using the now-stable workflow and package contracts.
-- Wave 5: freeze legacy event-config authoring and complete the package-worker cutover for new work.
-- Wave 6: treat mailroom as governed intake that feeds branches, packages, deadlines, and next-action recommendations.
-
-Cross-wave rule:
-
-- Keep one canonical hosted path, one canonical auth model, one canonical blueprint model, and one canonical package execution engine. Do not reopen those debates unless the repo materially contradicts them later.
+*Authoring date: 2026-03-21. Amend only with dated revisions or explicit version bumps when contracts change.*

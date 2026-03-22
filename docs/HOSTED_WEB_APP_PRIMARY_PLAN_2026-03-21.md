@@ -18,9 +18,9 @@ This plan is grounded in the current repo, not a hypothetical rebuild.
 
 ## Related Docs
 
-- Implementation packet: [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md)
-- Hosted Phase 1 backlog: [HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md)
-- Mailroom status and deferral rationale: [MAILROOM_VISION_AND_SOURCES_2026-03-21.md](./MAILROOM_VISION_AND_SOURCES_2026-03-21.md)
+- **[Foundation execution brief](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md)** — Authoritative implementation packet: hosted readiness contract, auth migration, blueprint model, matter operating console, legacy AI freeze, ordered waves (for implementers; freezes debate).
+- **[Hosted internal Phase 1 backlog](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md)** — HST-01 through HST-17 ticket queue.
+- **[Mailroom vision (canonical)](./MAILROOM_VISION_AND_SOURCES_2026-03-21.md)** — Mailroom is later orchestrated intake, not the current foundation wave.
 
 ## Current Reality
 

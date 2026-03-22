@@ -8,8 +8,9 @@ This memo collects everything located in a **search pass** for a **mail-room sty
 
 ## Related docs
 
-- Execution packet: [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md)
-- Hosted product-mode decision: [HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md)
+- **[Foundation execution brief](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md)** — Mailroom is **later orchestrated intake**; hosted readiness, auth, blueprints, and operating console are sequenced ahead of mailroom in that brief.
+- **[Hosted web app primary plan](./HOSTED_WEB_APP_PRIMARY_PLAN_2026-03-21.md)** — Product-mode decision (hosted internal web first).
+- **[Hosted internal Phase 1 backlog](./HOSTED_INTERNAL_PHASE1_BACKLOG_2026-03-21.md)** — HST ticket queue for hosted delivery.
 
 ## How this was assembled
 
@@ -151,6 +152,10 @@ Prerequisites called out in the threads:
 5. **Operator UX:** triage queue before top-level “Mailroom” nav is justified.
 
 ---
+
+## Related docs
+
+- **[Foundation execution brief](FOUNDATION_EXECUTION_BRIEF_2026-03-21.md)** — Where mailroom sits in execution order (later orchestrated intake; matter console first).
 
 ## 7. Keeping this doc current
 
