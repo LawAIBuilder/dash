@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { readFile } from "node:fs/promises";
+import { requireCaseAccess } from "../auth.js";
 import {
   addExhibitItem,
   createExhibit,
@@ -92,9 +93,64 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
     fetchPdfBytesForSourceItem
   } = input;
 
+  function requireExhibitCaseAccess(request: FastifyRequest, reply: FastifyReply, caseId: string) {
+    if (!assertCaseExists(caseId, reply)) {
+      return null;
+    }
+    return requireCaseAccess(db, request, reply, caseId);
+  }
+
+  function requireExhibitPacketAccess(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    caseId: string,
+    packetId: string
+  ) {
+    if (!requireExhibitCaseAccess(request, reply, caseId)) {
+      return false;
+    }
+    return assertPacketBelongsToCase(caseId, packetId, reply, "packet not found");
+  }
+
+  function requireExhibitSectionAccess(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    caseId: string,
+    sectionId: string
+  ) {
+    if (!requireExhibitCaseAccess(request, reply, caseId)) {
+      return false;
+    }
+    return assertSectionBelongsToCase(caseId, sectionId, reply, "section not found");
+  }
+
+  function requireExhibitAccess(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    caseId: string,
+    exhibitId: string
+  ) {
+    if (!requireExhibitCaseAccess(request, reply, caseId)) {
+      return false;
+    }
+    return assertExhibitBelongsToCase(caseId, exhibitId, reply, "exhibit not found");
+  }
+
+  function requireExhibitItemAccess(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    caseId: string,
+    itemId: string
+  ) {
+    if (!requireExhibitCaseAccess(request, reply, caseId)) {
+      return false;
+    }
+    return assertExhibitItemBelongsToCase(caseId, itemId, reply, "exhibit item not found");
+  }
+
   app.get("/api/cases/:caseId/exhibit-packets", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireExhibitCaseAccess(request, reply, caseId)) {
       return;
     }
     return {
@@ -106,7 +162,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.get("/api/cases/:caseId/exhibits", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) {
+    if (!requireExhibitCaseAccess(request, reply, caseId)) {
       return;
     }
     return {
@@ -129,7 +185,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
           starter_slot_count?: number;
         }
       | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireExhibitCaseAccess(request, reply, caseId)) return;
 
     const pkgType = body?.package_type?.trim() ?? "hearing_packet";
     const starterSlots =
@@ -158,7 +214,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.patch("/api/cases/:caseId/exhibit-packets/:packetId", async (request, reply) => {
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
-    if (!assertPacketBelongsToCase(caseId, packetId, reply, "packet not found")) return;
+    if (!requireExhibitPacketAccess(request, reply, caseId, packetId)) return;
     const body = request.body as
       | {
           packet_name?: string | null;
@@ -196,7 +252,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.post("/api/cases/:caseId/exhibit-packets/:packetId/sections", async (request, reply) => {
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
-    if (!assertPacketBelongsToCase(caseId, packetId, reply, "packet not found")) return;
+    if (!requireExhibitPacketAccess(request, reply, caseId, packetId)) return;
     const body = request.body as { section_key?: string; section_label?: string } | undefined;
     const packet = createExhibitSection(db, {
       packetId,
@@ -212,7 +268,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.post("/api/cases/:caseId/exhibit-packets/:packetId/sections/reorder", async (request, reply) => {
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
-    if (!assertPacketBelongsToCase(caseId, packetId, reply, "packet not found")) return;
+    if (!requireExhibitPacketAccess(request, reply, caseId, packetId)) return;
     const body = request.body as { section_ids?: string[] } | undefined;
     if (!body?.section_ids?.length) {
       return reply.code(400).send({ ok: false, error: "section_ids are required" });
@@ -227,7 +283,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.post("/api/cases/:caseId/exhibit-sections/:sectionId/exhibits/reorder", async (request, reply) => {
     const { caseId, sectionId } = request.params as { caseId: string; sectionId: string };
-    if (!assertSectionBelongsToCase(caseId, sectionId, reply, "section not found")) return;
+    if (!requireExhibitSectionAccess(request, reply, caseId, sectionId)) return;
     const body = request.body as { exhibit_ids?: string[] } | undefined;
     if (!body?.exhibit_ids?.length) {
       return reply.code(400).send({ ok: false, error: "exhibit_ids are required" });
@@ -242,7 +298,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.patch("/api/cases/:caseId/exhibit-sections/:sectionId", async (request, reply) => {
     const { caseId, sectionId } = request.params as { caseId: string; sectionId: string };
-    if (!assertSectionBelongsToCase(caseId, sectionId, reply, "section not found")) return;
+    if (!requireExhibitSectionAccess(request, reply, caseId, sectionId)) return;
     const body = request.body as { section_label?: string | null; sort_order?: number | null } | undefined;
     const packet = updateExhibitSection(db, {
       sectionId,
@@ -257,7 +313,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.delete("/api/cases/:caseId/exhibit-sections/:sectionId", async (request, reply) => {
     const { caseId, sectionId } = request.params as { caseId: string; sectionId: string };
-    if (!assertSectionBelongsToCase(caseId, sectionId, reply, "section not found")) return;
+    if (!requireExhibitSectionAccess(request, reply, caseId, sectionId)) return;
     const packet = deleteExhibitSection(db, sectionId);
     if (!packet) {
       return reply.code(404).send({ ok: false, error: "section not found" });
@@ -267,7 +323,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.post("/api/cases/:caseId/exhibit-sections/:sectionId/exhibits", async (request, reply) => {
     const { caseId, sectionId } = request.params as { caseId: string; sectionId: string };
-    if (!assertSectionBelongsToCase(caseId, sectionId, reply, "section not found")) return;
+    if (!requireExhibitSectionAccess(request, reply, caseId, sectionId)) return;
     const body = request.body as
       | {
           exhibit_label?: string | null;
@@ -303,7 +359,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
           notes?: string | null;
         }
       | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireExhibitCaseAccess(request, reply, caseId)) return;
     if (!body?.section_id) {
       return reply.code(400).send({ ok: false, error: "section_id is required" });
     }
@@ -324,7 +380,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.patch("/api/cases/:caseId/exhibits/:exhibitId", async (request, reply) => {
     const { caseId, exhibitId } = request.params as { caseId: string; exhibitId: string };
-    if (!assertExhibitBelongsToCase(caseId, exhibitId, reply, "exhibit not found")) return;
+    if (!requireExhibitAccess(request, reply, caseId, exhibitId)) return;
     const body = request.body as
       | {
           exhibit_label?: string | null;
@@ -354,7 +410,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.delete("/api/cases/:caseId/exhibits/:exhibitId", async (request, reply) => {
     const { caseId, exhibitId } = request.params as { caseId: string; exhibitId: string };
-    if (!assertExhibitBelongsToCase(caseId, exhibitId, reply, "exhibit not found")) return;
+    if (!requireExhibitAccess(request, reply, caseId, exhibitId)) return;
     const packet = deleteExhibit(db, exhibitId);
     if (!packet) {
       return reply.code(404).send({ ok: false, error: "exhibit not found" });
@@ -364,7 +420,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.post("/api/cases/:caseId/exhibits/:exhibitId/items", async (request, reply) => {
     const { caseId, exhibitId } = request.params as { caseId: string; exhibitId: string };
-    if (!assertExhibitBelongsToCase(caseId, exhibitId, reply, "exhibit not found")) return;
+    if (!requireExhibitAccess(request, reply, caseId, exhibitId)) return;
     const body = request.body as { source_item_id?: string; notes?: string | null } | undefined;
     if (!body?.source_item_id) {
       return reply.code(400).send({ ok: false, error: "source_item_id is required" });
@@ -383,7 +439,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.delete("/api/cases/:caseId/exhibit-items/:itemId", async (request, reply) => {
     const { caseId, itemId } = request.params as { caseId: string; itemId: string };
-    if (!assertExhibitItemBelongsToCase(caseId, itemId, reply, "exhibit item not found")) return;
+    if (!requireExhibitItemAccess(request, reply, caseId, itemId)) return;
     const packet = removeExhibitItem(db, itemId);
     if (!packet) {
       return reply.code(404).send({ ok: false, error: "exhibit item not found" });
@@ -393,7 +449,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.patch("/api/cases/:caseId/exhibit-items/:itemId/page-rules", async (request, reply) => {
     const { caseId, itemId } = request.params as { caseId: string; itemId: string };
-    if (!assertExhibitItemBelongsToCase(caseId, itemId, reply, "exhibit item not found")) return;
+    if (!requireExhibitItemAccess(request, reply, caseId, itemId)) return;
     const body = request.body as { exclude_canonical_page_ids?: string[] } | undefined;
     if (body?.exclude_canonical_page_ids && body.exclude_canonical_page_ids.length > 1000) {
       return reply.code(400).send({ ok: false, error: "exclude_canonical_page_ids may not exceed 1000 items" });
@@ -411,7 +467,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.get("/api/cases/:caseId/exhibit-packets/:packetId/suggestions", async (request, reply) => {
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
-    if (!assertPacketBelongsToCase(caseId, packetId, reply, "packet not found")) return;
+    if (!requireExhibitPacketAccess(request, reply, caseId, packetId)) return;
     const suggestions = getPacketSuggestions(db, packetId);
     if (!suggestions) {
       return reply.code(404).send({ ok: false, error: "packet not found" });
@@ -421,7 +477,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.get("/api/cases/:caseId/exhibit-packets/:packetId/history", async (request, reply) => {
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
-    if (!assertPacketBelongsToCase(caseId, packetId, reply, "packet not found")) return;
+    if (!requireExhibitPacketAccess(request, reply, caseId, packetId)) return;
     const history = getPacketHistory(db, packetId);
     if (!history) {
       return reply.code(404).send({ ok: false, error: "packet not found" });
@@ -431,7 +487,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.post("/api/cases/:caseId/exhibit-packets/:packetId/suggestions/:suggestionId/resolve", async (request, reply) => {
     const { caseId, packetId, suggestionId } = request.params as { caseId: string; packetId: string; suggestionId: string };
-    if (!assertPacketBelongsToCase(caseId, packetId, reply, "packet not found")) return;
+    if (!requireExhibitPacketAccess(request, reply, caseId, packetId)) return;
     const body = request.body as { action?: "accept" | "dismiss"; note?: string | null } | undefined;
     if (body?.action !== "accept" && body?.action !== "dismiss") {
       return reply.code(400).send({ ok: false, error: "action must be accept or dismiss" });
@@ -451,7 +507,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.post("/api/cases/:caseId/exhibit-packets/:packetId/finalize", async (request, reply) => {
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
-    if (!assertPacketBelongsToCase(caseId, packetId, reply, "packet not found")) return;
+    if (!requireExhibitPacketAccess(request, reply, caseId, packetId)) return;
     const result = finalizeExhibitPacket(db, packetId);
     if (!result) {
       return reply.code(404).send({ ok: false, error: "packet not found" });
@@ -462,7 +518,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
   app.post("/api/cases/:caseId/exhibit-packets/:packetId/exports/packet-pdf", async (request, reply) => {
     if (!enforceExpensiveRouteRateLimit(request, reply, "packet-pdf-export")) return;
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
-    if (!assertPacketBelongsToCase(caseId, packetId, reply, "packet not found")) return;
+    if (!requireExhibitPacketAccess(request, reply, caseId, packetId)) return;
     if (
       !enforceCaseDailyUsageLimit(reply, {
         caseId,
@@ -500,12 +556,13 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.get("/api/cases/:caseId/exhibit-packets/:packetId/exports", async (request, reply) => {
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
-    if (!assertPacketBelongsToCase(caseId, packetId, reply, "packet not found")) return;
+    if (!requireExhibitPacketAccess(request, reply, caseId, packetId)) return;
     return { ok: true, exports: listPacketExportsForPacket(db, packetId) };
   });
 
   app.get("/api/cases/:caseId/exhibit-packet-exports/:exportId", async (request, reply) => {
     const { caseId, exportId } = request.params as { caseId: string; exportId: string };
+    if (!requireExhibitCaseAccess(request, reply, caseId)) return;
     const row = getPacketExportRow(db, exportId);
     if (!row || row.case_id !== caseId) {
       return reply.code(404).send({ ok: false, error: "export not found" });
@@ -529,6 +586,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
 
   app.get("/api/cases/:caseId/exhibit-packet-exports/:exportId/pdf", async (request, reply) => {
     const { caseId, exportId } = request.params as { caseId: string; exportId: string };
+    if (!requireExhibitCaseAccess(request, reply, caseId)) return;
     const row = getPacketExportRow(db, exportId);
     if (!row || row.case_id !== caseId || row.status !== "complete" || !row.pdf_relative_path) {
       return reply.code(404).send({ ok: false, error: "export PDF not available" });
@@ -547,7 +605,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
   app.post("/api/cases/:caseId/packet-preview", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
     const body = request.body as { packet_id?: string } | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireExhibitCaseAccess(request, reply, caseId)) return;
     if (!body?.packet_id) {
       return reply.code(400).send({ ok: false, error: "packet_id is required" });
     }
@@ -562,7 +620,7 @@ export function registerExhibitRoutes(input: RegisterExhibitRoutesInput) {
   app.post("/api/cases/:caseId/exhibit-list/generate", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
     const body = request.body as { packet_id?: string } | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireExhibitCaseAccess(request, reply, caseId)) return;
     if (!body?.packet_id) {
       return reply.code(400).send({ ok: false, error: "packet_id is required" });
     }
