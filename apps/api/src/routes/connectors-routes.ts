@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
+import { requireAuthenticatedUser, requireCaseAccess } from "../auth.js";
 import { getSourceConnectorSpec } from "../source-adapters.js";
 import {
   beginSourceConnectionAuth,
@@ -63,6 +64,52 @@ export interface RegisterConnectorRoutesInput {
 
 export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
   const { app, db, enableDevRoutes, enforceExpensiveRouteRateLimit } = input;
+
+  function requireConnectorAdminAccess(request: FastifyRequest, reply: FastifyReply) {
+    if (request.user) {
+      return requireAuthenticatedUser(request, reply, { roles: ["admin"] });
+    }
+    if (request.authMode === "api_key" || request.authMode === "none") {
+      return { id: null };
+    }
+    void reply.code(401).send({ ok: false, error: "Unauthorized" });
+    return null;
+  }
+
+  function requireConnectorCaseAccess(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    caseId: string
+  ) {
+    const caseRow = db
+      .prepare(
+        `
+          SELECT id, box_root_folder_id, pp_matter_id
+          FROM cases
+          WHERE id = ?
+          LIMIT 1
+        `
+      )
+      .get(caseId) as
+      | {
+          id: string;
+          box_root_folder_id: string | null;
+          pp_matter_id: string | null;
+        }
+      | undefined;
+
+    if (!caseRow) {
+      void reply.code(404).send({ ok: false, error: "case not found" });
+      return null;
+    }
+
+    const access = requireCaseAccess(db, request, reply, caseRow.id);
+    if (!access) {
+      return null;
+    }
+
+    return caseRow;
+  }
 
   function readSourceConnectionByProvider(provider: "box" | "practicepanther") {
     return db
@@ -301,6 +348,7 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
   }
 
   app.post("/api/connectors/box/auth/start", async (request, reply) => {
+    if (!requireConnectorAdminAccess(request, reply)) return;
     if (!enableDevRoutes) {
       return reply.code(404).send({
         ok: false,
@@ -329,6 +377,7 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
   });
 
   app.post("/api/connectors/box/auth/jwt", async (request, reply) => {
+    if (!requireConnectorAdminAccess(request, reply)) return;
     const spec = getSourceConnectorSpec("box");
     const body = request.body as { connection_id?: string | null; account_label?: string | null } | undefined;
     const config = resolveBoxProviderConfig();
@@ -358,6 +407,7 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
   });
 
   app.get("/api/connectors/box/folders/:folderId/items", async (request, reply) => {
+    if (!requireConnectorAdminAccess(request, reply)) return;
     const config = resolveBoxProviderConfig();
     if (!config) {
       return reply.code(400).send({
@@ -388,7 +438,8 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
     };
   });
 
-  app.get("/api/connectors/practicepanther/status", async () => {
+  app.get("/api/connectors/practicepanther/status", async (request, reply) => {
+    if (!requireConnectorAdminAccess(request, reply)) return;
     const connection = readSourceConnectionByProvider("practicepanther");
     const sanitized = connection
       ? {
@@ -414,6 +465,7 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
   });
 
   app.get("/api/connectors/practicepanther/matters", async (request, reply) => {
+    if (!requireConnectorAdminAccess(request, reply)) return;
     const connection = readSourceConnectionByProvider("practicepanther");
     if (!connection) {
       return reply.code(404).send({ ok: false, error: "practicepanther connection not found" });
@@ -513,19 +565,8 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
       return reply.code(400).send({ ok: false, error: "case_id is required" });
     }
 
-    const caseRow = db
-      .prepare(
-        `
-          SELECT id, pp_matter_id
-          FROM cases
-          WHERE id = ?
-          LIMIT 1
-        `
-      )
-      .get(body.case_id.trim()) as { id: string; pp_matter_id: string | null } | undefined;
-    if (!caseRow) {
-      return reply.code(404).send({ ok: false, error: "case not found" });
-    }
+    const caseRow = requireConnectorCaseAccess(request, reply, body.case_id.trim());
+    if (!caseRow) return;
 
     const connection = readSourceConnectionByProvider("practicepanther");
     if (!connection) {
@@ -783,20 +824,8 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
       return reply.code(400).send({ ok: false, error: "case_id is required" });
     }
 
-    const caseRow = db
-      .prepare(
-        `
-          SELECT id, box_root_folder_id
-          FROM cases
-          WHERE id = ?
-          LIMIT 1
-        `
-      )
-      .get(body.case_id.trim()) as { id: string; box_root_folder_id: string | null } | undefined;
-
-    if (!caseRow) {
-      return reply.code(404).send({ ok: false, error: "case not found" });
-    }
+    const caseRow = requireConnectorCaseAccess(request, reply, body.case_id.trim());
+    if (!caseRow) return;
 
     const rootFolderId =
       (typeof body.root_folder_id === "string" && body.root_folder_id.trim().length > 0
@@ -844,6 +873,7 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
   });
 
   app.post("/api/connectors/practicepanther/auth/start", async (request, reply) => {
+    if (!requireConnectorAdminAccess(request, reply)) return;
     const spec = getSourceConnectorSpec("practicepanther");
     const body = request.body as
       | { account_label?: string; scopes?: string[]; return_to?: string | null }
@@ -884,6 +914,7 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
   });
 
   app.post("/api/connectors/:provider/auth/complete", async (request, reply) => {
+    if (!requireConnectorAdminAccess(request, reply)) return;
     const body = request.body as
       | {
           connection_id?: string | null;
@@ -942,6 +973,8 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
       return reply.code(400).send({ ok: false, error: "case_id and at least one file are required" });
     }
 
+    if (!requireConnectorCaseAccess(request, reply, body.case_id)) return;
+
     return hydrateBoxInventory(db, {
       caseId: body.case_id,
       accountLabel: body.account_label ?? null,
@@ -981,6 +1014,8 @@ export function registerConnectorRoutes(input: RegisterConnectorRoutesInput) {
     if (!body?.case_id || !body.entities?.length) {
       return reply.code(400).send({ ok: false, error: "case_id and at least one entity are required" });
     }
+
+    if (!requireConnectorCaseAccess(request, reply, body.case_id)) return;
 
     return hydratePracticePantherState(db, {
       caseId: body.case_id,

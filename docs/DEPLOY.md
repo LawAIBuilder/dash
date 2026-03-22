@@ -46,6 +46,14 @@ Without the worker, **Queue OCR** only enqueues rows; text is not produced until
 - **Browser bundle fallback:** only set **`VITE_WC_API_KEY`** if you are intentionally still using shared browser bearer mode. It is **not** required when hosted browser login is enabled.
 - This repo now supports both modes, but the shared-key browser model is still **transitional hosted auth**, not the final security model. See [FOUNDATION_EXECUTION_BRIEF_2026-03-21.md](./FOUNDATION_EXECUTION_BRIEF_2026-03-21.md).
 
+### Current connector auth split
+
+| Route family | Session-auth rule | Transitional behavior |
+| --- | --- | --- |
+| Connector account setup and tenant-level browsing: `/api/connectors/box/auth/start`, `/api/connectors/box/auth/jwt`, `/api/connectors/box/folders/:folderId/items`, `/api/connectors/practicepanther/status`, `/api/connectors/practicepanther/matters`, `/api/connectors/practicepanther/auth/start`, `/api/connectors/:provider/auth/complete` | **Admin-only** | `WC_API_KEY` fallback still works; open-dev mode stays open if no auth mode is configured |
+| Per-case sync and development hydrate: `/api/connectors/box/sync`, `/api/connectors/practicepanther/sync`, `/api/connectors/box/development/hydrate`, `/api/connectors/practicepanther/development/hydrate` | **Case membership required** for non-admin session users | Admin override still works; `WC_API_KEY` fallback still works; open-dev mode stays open if no auth mode is configured |
+| OAuth callback: `/api/connectors/practicepanther/callback` | **Unchanged callback exemption** | Security still depends on OAuth `state` and redirect-uri validation, not case membership |
+
 ## Box (OCR worker + sync)
 
 - **`BOX_JWT_CONFIG_JSON`**, **`BOX_JWT_CONFIG_FILE`**, or **`BOX_JWT_CONFIG`** — same as local.
