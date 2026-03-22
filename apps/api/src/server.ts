@@ -404,7 +404,7 @@ function readSourceConnectionByProvider(provider: "box" | "practicepanther") {
           created_at
         FROM source_connections
         WHERE provider = ?
-        ORDER BY created_at ASC
+        ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC, id DESC
         LIMIT 1
       `
     )
@@ -1733,6 +1733,13 @@ app.post("/dev/cases", async (request) => {
 });
 
 app.post("/api/connectors/box/auth/start", async (request, reply) => {
+  if (!ENABLE_DEV_ROUTES) {
+    return reply.code(404).send({
+      ok: false,
+      error: "Not found"
+    });
+  }
+
   const spec = getSourceConnectorSpec("box");
   const body = request.body as { account_label?: string; scopes?: string[] } | undefined;
   const connection = beginSourceConnectionAuth(db, {

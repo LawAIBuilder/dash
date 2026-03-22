@@ -1297,7 +1297,7 @@ export function ensureSourceConnection(
         SELECT id, provider, account_label, auth_mode, scopes, status
         FROM source_connections
         WHERE provider = ?
-        ORDER BY created_at ASC
+        ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC, id DESC
         LIMIT 1
       `
     )
@@ -1368,7 +1368,7 @@ export function beginSourceConnectionAuth(
         SELECT id, provider, account_label
         FROM source_connections
         WHERE provider = ?
-        ORDER BY created_at ASC
+        ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC, id DESC
         LIMIT 1
       `
     )

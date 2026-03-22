@@ -111,4 +111,27 @@ describe("server security defaults", () => {
       await server.cleanup();
     }
   });
+
+  it("hides placeholder box browser auth outside dev mode", async () => {
+    const server = await loadServerWithEnv({
+      NODE_ENV: "staging",
+      WC_ENABLE_DEV_ROUTES: "0"
+    });
+
+    try {
+      const res = await server.app.inject({
+        method: "POST",
+        url: "/api/connectors/box/auth/start",
+        payload: { account_label: "Staging Box" }
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual({
+        ok: false,
+        error: "Not found"
+      });
+    } finally {
+      await server.cleanup();
+    }
+  });
 });
