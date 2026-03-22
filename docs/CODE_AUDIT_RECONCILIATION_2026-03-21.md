@@ -9,6 +9,11 @@ This memo reconciles two independent audit passes:
 
 The goal is not to replace either audit, but to merge them into a sharper execution plan.
 
+Related strategic docs:
+
+- [Intelligence Spine And Corpus Vision](./INTELLIGENCE_SPINE_AND_CORPUS_VISION_2026-03-21.md)
+- [Package Studio Contract](./package-studio/README.md)
+
 ## What Changed After The Second Pass
 
 After reviewing the second audit against source, I would revise the plan in four important ways.
@@ -395,4 +400,3 @@ Also give me at least two alternative strategies:
 
 Be specific. Cite files and functions when you disagree.
 ```
-
