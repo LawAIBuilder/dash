@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
+import { ensureCaseMembership } from "../auth.js";
 import type { EnsureCaseScaffoldInput } from "../runtime.js";
 import type { CaseRouteReply } from "./types.js";
 
@@ -149,6 +150,14 @@ export function registerCaseCatalogRoutes(input: RegisterCaseCatalogRoutesInput)
       insurerName: body.insurer_name ?? null,
       hearingDate: body.hearing_date ?? null
     });
+
+    if (request.user) {
+      ensureCaseMembership(db, {
+        caseId: scaffold.caseId,
+        userId: request.user.id,
+        role: request.user.role
+      });
+    }
 
     return {
       ok: true,

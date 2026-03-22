@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,7 +32,7 @@ import {
   getPageChunksInCase
 } from "../retrieval.js";
 import { resolvePackageExportDir } from "../storage-paths.js";
-import { readApprovedByFallbackHeader, requireAuthenticatedUser } from "../auth.js";
+import { requireCaseAccess, requireWriteActor } from "../auth.js";
 import type { CaseRouteReply, HeaderRouteReply } from "./types.js";
 
 export interface RegisterPackageWorkbenchRoutesInput {
@@ -80,10 +80,19 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
     enforceExpensiveRouteRateLimit
   } = input;
 
+  function requireWorkbenchCaseAccess(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    caseId: string
+  ) {
+    if (!assertCaseExists(caseId, reply)) return null;
+    return requireCaseAccess(db, request, reply, caseId);
+  }
+
   app.post("/api/cases/:caseId/uploads", async (request, reply) => {
     if (!enforceExpensiveRouteRateLimit(request, reply, "case-upload")) return;
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
 
     const file = await request.file();
     if (!file) {
@@ -109,7 +118,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.get("/api/cases/:caseId/people", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     const people = db
       .prepare(
         `
@@ -125,7 +134,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.get("/api/cases/:caseId/timeline", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     const projection = buildCaseProjection(db, caseId);
     if (!projection) {
       return reply.code(404).send({ ok: false, error: "case not found" });
@@ -139,7 +148,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.get("/api/cases/:caseId/activity", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     const events = db
       .prepare(
         `
@@ -157,7 +166,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
   app.get("/api/cases/:caseId/hearing-prep", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
     const query = request.query as { packet_id?: string } | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     const snapshot = buildHearingPrepSnapshot(db, {
       caseId,
       packetId: query?.packet_id?.trim() || null
@@ -170,7 +179,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.get("/api/cases/:caseId/historical-flow", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     return {
       ok: true,
       case_id: caseId,
@@ -180,7 +189,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.get("/api/cases/:caseId/historical-recommendations", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     return {
       ok: true,
       case_id: caseId,
@@ -196,7 +205,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
   app.get("/api/cases/:caseId/package-rules", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
     const q = request.query as { package_type?: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!q?.package_type?.trim()) {
       return reply.code(400).send({ ok: false, error: "package_type query parameter is required" });
     }
@@ -223,7 +232,9 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
           sort_order?: number;
         }
       | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
+    const actor = requireWriteActor(request, reply);
+    if (!actor) return;
     if (!body?.package_type?.trim() || !body.rule_key?.trim() || !body.rule_label?.trim()) {
       return reply.code(400).send({ ok: false, error: "package_type, rule_key, and rule_label are required" });
     }
@@ -231,8 +242,20 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
     try {
       db.prepare(
         `
-          INSERT INTO package_rules (id, case_id, package_type, rule_key, rule_label, instructions, sort_order)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO package_rules (
+            id,
+            case_id,
+            package_type,
+            rule_key,
+            rule_label,
+            instructions,
+            sort_order,
+            created_by,
+            created_by_user_id,
+            updated_by,
+            updated_by_user_id
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
       ).run(
         id,
@@ -241,7 +264,11 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
         body.rule_key.trim(),
         body.rule_label.trim(),
         body.instructions?.trim() ?? "",
-        body.sort_order ?? 0
+        body.sort_order ?? 0,
+        actor.actorLabel,
+        actor.actorUserId,
+        actor.actorLabel,
+        actor.actorUserId
       );
     } catch {
       return reply.code(400).send({ ok: false, error: "rule already exists or invalid" });
@@ -257,8 +284,10 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
       instructions?: string;
       sort_order?: number;
     };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!assertPackageRuleBelongsToCase(caseId, ruleId, reply)) return;
+    const actor = requireWriteActor(request, reply);
+    if (!actor) return;
     const updates: string[] = [];
     const params: Array<string | number | null> = [];
     if (body.rule_label !== undefined) {
@@ -276,6 +305,10 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
     if (updates.length === 0) {
       return reply.code(400).send({ ok: false, error: "no updates" });
     }
+    updates.push("updated_by = ?");
+    params.push(actor.actorLabel);
+    updates.push("updated_by_user_id = ?");
+    params.push(actor.actorUserId);
     updates.push("updated_at = CURRENT_TIMESTAMP");
     db.prepare(`UPDATE package_rules SET ${updates.join(", ")} WHERE id = ?`).run(...params, ruleId);
     return { ok: true, rule: db.prepare(`SELECT * FROM package_rules WHERE id = ?`).get(ruleId) };
@@ -283,8 +316,9 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.delete("/api/cases/:caseId/package-rules/:ruleId", async (request, reply) => {
     const { caseId, ruleId } = request.params as { caseId: string; ruleId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!assertPackageRuleBelongsToCase(caseId, ruleId, reply)) return;
+    if (!requireWriteActor(request, reply)) return;
     const run = db.prepare(`DELETE FROM package_rules WHERE id = ?`).run(ruleId);
     if (run.changes === 0) {
       return reply.code(404).send({ ok: false, error: "rule not found" });
@@ -295,7 +329,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
   app.get("/api/cases/:caseId/golden-examples", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
     const q = request.query as { package_type?: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     const where = q?.package_type?.trim()
       ? `WHERE (case_id IS NULL OR case_id = ?) AND package_type = ?`
       : `WHERE case_id IS NULL OR case_id = ?`;
@@ -314,7 +348,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
       source_item_ids_json?: string;
       metadata_json?: string;
     };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!body.package_type?.trim()) {
       return reply.code(400).send({ ok: false, error: "package_type is required" });
     }
@@ -338,7 +372,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.delete("/api/cases/:caseId/golden-examples/:exampleId", async (request, reply) => {
     const { caseId, exampleId } = request.params as { caseId: string; exampleId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     const run = db.prepare(`DELETE FROM golden_examples WHERE id = ? AND case_id = ?`).run(exampleId, caseId);
     if (run.changes === 0) {
       return reply.code(404).send({ ok: false, error: "not found" });
@@ -355,7 +389,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
       page_start?: number;
       page_end?: number;
     };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     const mode = body.mode ?? "summary";
     const packageType = body.package_type?.trim() ?? "hearing_packet";
 
@@ -402,7 +436,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
     if (!enforceExpensiveRouteRateLimit(request, reply, "package-run")) return;
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
     const body = request.body as { whole_file_source_item_ids?: string[] } | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!assertPacketBelongsToCase(caseId, packetId, reply)) return;
     if (body?.whole_file_source_item_ids?.length && !assertSourceItemsBelongToCase(caseId, body.whole_file_source_item_ids, reply)) {
       return;
@@ -427,14 +461,14 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.get("/api/cases/:caseId/exhibit-packets/:packetId/package-runs", async (request, reply) => {
     const { caseId, packetId } = request.params as { caseId: string; packetId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!assertPacketBelongsToCase(caseId, packetId, reply)) return;
     return { ok: true, runs: listPackageRunsForPacket(db, packetId) };
   });
 
   app.get("/api/cases/:caseId/package-runs/:runId", async (request, reply) => {
     const { caseId, runId } = request.params as { caseId: string; runId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
     const row = db
       .prepare(
@@ -455,7 +489,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
   app.patch("/api/cases/:caseId/package-runs/:runId", async (request, reply) => {
     const { caseId, runId } = request.params as { caseId: string; runId: string };
     const body = request.body as { markdown?: string } | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
     if (typeof body?.markdown !== "string") {
       return reply.code(400).send({ ok: false, error: "markdown is required" });
@@ -476,38 +510,17 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
   app.post("/api/cases/:caseId/package-runs/:runId/approve", async (request, reply) => {
     const { caseId, runId } = request.params as { caseId: string; runId: string };
     const body = request.body as { note?: string } | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
-
-    let approvedBy: string | null = null;
-    let approvedByUserId: string | null = null;
-
-    if (request.user) {
-      const user = requireAuthenticatedUser(request, reply, {
-        roles: ["reviewer", "approver", "admin"]
-      });
-      if (!user) return;
-      approvedBy = user.email;
-      approvedByUserId = user.id;
-    } else if (request.authMode === "api_key") {
-      approvedBy = readApprovedByFallbackHeader(request);
-      if (!approvedBy) {
-        return reply.code(400).send({
-          ok: false,
-          error: "x-wc-actor is required when approving via API key fallback"
-        });
-      }
-    } else {
-      return reply.code(401).send({
-        ok: false,
-        error: "Login required"
-      });
-    }
+    const actor = requireWriteActor(request, reply, {
+      roles: ["reviewer", "approver", "admin"]
+    });
+    if (!actor) return;
 
     const updated = approvePackageRun(db, {
       runId,
-      approvedBy,
-      approvedByUserId,
+      approvedBy: actor.actorLabel,
+      approvedByUserId: actor.actorUserId,
       note: body?.note ?? null
     });
     if (!updated) {
@@ -519,7 +532,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
   app.post("/api/cases/:caseId/package-runs/:runId/export-docx", async (request, reply) => {
     if (!enforceExpensiveRouteRateLimit(request, reply, "package-export-docx")) return;
     const { caseId, runId } = request.params as { caseId: string; runId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!assertPackageRunBelongsToCase(caseId, runId, reply)) return;
     const run = getPackageRun(db, runId);
     if (!run || !run.output_json) {
@@ -576,7 +589,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.get("/api/cases/:caseId/ai/event-configs", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     return { ok: true, configs: listAIEventConfigs(db, caseId) };
   });
 
@@ -588,7 +601,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
       instructions?: string;
       exhibit_strategy_json?: string | null;
     } | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!body?.event_type?.trim()) return reply.code(400).send({ ok: false, error: "event_type is required" });
     if (!body?.event_label?.trim()) return reply.code(400).send({ ok: false, error: "event_label is required" });
 
@@ -604,6 +617,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.delete("/api/cases/:caseId/ai/event-configs/:configId", async (request, reply) => {
     const { caseId, configId } = request.params as { caseId: string; configId: string };
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     if (!deleteAIEventConfig(db, caseId, configId)) {
       return reply.code(404).send({ ok: false, error: "config not found" });
     }
@@ -614,7 +628,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
     if (!enforceExpensiveRouteRateLimit(request, reply, "ai-assemble")) return;
     const { caseId } = request.params as { caseId: string };
     const body = request.body as { event_type?: string } | undefined;
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     const assemblyEventType = body?.event_type?.trim();
     if (!assemblyEventType) return reply.code(400).send({ ok: false, error: "event_type is required" });
 
@@ -638,7 +652,7 @@ export function registerPackageWorkbenchRoutes(input: RegisterPackageWorkbenchRo
 
   app.get("/api/cases/:caseId/ai/jobs", async (request, reply) => {
     const { caseId } = request.params as { caseId: string };
-    if (!assertCaseExists(caseId, reply)) return;
+    if (!requireWorkbenchCaseAccess(request, reply, caseId)) return;
     return { ok: true, jobs: listAIJobs(db, caseId) };
   });
 }

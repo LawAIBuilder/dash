@@ -1233,5 +1233,29 @@ export const authoritativeMigrations: AuthoritativeMigration[] = [
         CREATE INDEX IF NOT EXISTS idx_package_runs_approved_by_user ON package_runs(approved_by_user_id);
       `);
     }
+  },
+  {
+    id: "0024_package_rule_actor_stamps",
+    description: "Case-level package rule actor stamping for authenticated principals and fallback actors",
+    up(db) {
+      addColumnIfMissing(db, "package_rules", "created_by", "created_by TEXT");
+      addColumnIfMissing(
+        db,
+        "package_rules",
+        "created_by_user_id",
+        "created_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL"
+      );
+      addColumnIfMissing(db, "package_rules", "updated_by", "updated_by TEXT");
+      addColumnIfMissing(
+        db,
+        "package_rules",
+        "updated_by_user_id",
+        "updated_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL"
+      );
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_package_rules_created_by_user ON package_rules(created_by_user_id);
+        CREATE INDEX IF NOT EXISTS idx_package_rules_updated_by_user ON package_rules(updated_by_user_id);
+      `);
+    }
   }
 ];

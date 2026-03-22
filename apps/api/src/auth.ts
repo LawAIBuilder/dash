@@ -39,11 +39,31 @@ type DbSessionRow = {
   active: number;
 };
 
+type DbCaseMembershipRow = {
+  case_id: string;
+  user_id: string;
+  role: string;
+};
+
 export interface AuthSessionSummary {
   sessionEnabled: boolean;
   apiKeyFallbackEnabled: boolean;
   bootstrapAdminConfigured: boolean;
   bootstrapAdminPending: boolean;
+}
+
+export interface CaseAccessGrant {
+  authMode: "none" | "session" | "api_key";
+  user: AuthenticatedUser | null;
+  membershipRole: UserRole | null;
+  adminOverride: boolean;
+}
+
+export interface WriteActor {
+  authMode: "none" | "session" | "api_key";
+  actorLabel: string | null;
+  actorUserId: string | null;
+  user: AuthenticatedUser | null;
 }
 
 declare module "fastify" {
@@ -489,11 +509,177 @@ export function requireAuthenticatedUser(
   return request.user;
 }
 
-export function readApprovedByFallbackHeader(request: FastifyRequest) {
-  const approvedByHeader = request.headers["x-wc-actor"];
-  if (typeof approvedByHeader === "string" && approvedByHeader.trim()) {
-    return approvedByHeader.trim();
+export function getFallbackActorHeader(request: FastifyRequest) {
+  const actorHeader = request.headers["x-wc-actor"];
+  if (typeof actorHeader === "string" && actorHeader.trim()) {
+    return actorHeader.trim();
   }
   return null;
 }
 
+export function readApprovedByFallbackHeader(request: FastifyRequest) {
+  return getFallbackActorHeader(request);
+}
+
+export function ensureCaseMembership(
+  db: Database.Database,
+  input: {
+    caseId: string;
+    userId: string;
+    role: UserRole;
+  }
+) {
+  db.prepare(
+    `
+      INSERT INTO case_memberships (id, case_id, user_id, role)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(case_id, user_id) DO UPDATE SET
+        role = excluded.role,
+        updated_at = CURRENT_TIMESTAMP
+    `
+  ).run(randomUUID(), input.caseId, input.userId, input.role);
+}
+
+export function getCaseMembership(
+  db: Database.Database,
+  input: {
+    caseId: string;
+    userId: string;
+  }
+) {
+  const row = db
+    .prepare(
+      `
+        SELECT case_id, user_id, role
+        FROM case_memberships
+        WHERE case_id = ? AND user_id = ?
+        LIMIT 1
+      `
+    )
+    .get(input.caseId, input.userId) as DbCaseMembershipRow | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    caseId: row.case_id,
+    userId: row.user_id,
+    role: normalizeRole(row.role)
+  };
+}
+
+export function requireCaseAccess(
+  db: Database.Database,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  caseId: string
+): CaseAccessGrant | null {
+  if (request.user) {
+    if (request.user.role === "admin") {
+      return {
+        authMode: "session",
+        user: request.user,
+        membershipRole: null,
+        adminOverride: true
+      };
+    }
+
+    const membership = getCaseMembership(db, {
+      caseId,
+      userId: request.user.id
+    });
+    if (!membership) {
+      void reply.code(403).send({
+        ok: false,
+        error: "Forbidden"
+      });
+      return null;
+    }
+
+    return {
+      authMode: "session",
+      user: request.user,
+      membershipRole: membership.role,
+      adminOverride: false
+    };
+  }
+
+  if (request.authMode === "api_key") {
+    return {
+      authMode: "api_key",
+      user: null,
+      membershipRole: null,
+      adminOverride: false
+    };
+  }
+
+  if (request.authMode === "none") {
+    return {
+      authMode: "none",
+      user: null,
+      membershipRole: null,
+      adminOverride: false
+    };
+  }
+
+  void reply.code(401).send({
+    ok: false,
+    error: "Login required"
+  });
+  return null;
+}
+
+export function requireWriteActor(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  options?: {
+    roles?: UserRole[];
+    fallbackHeaderLabel?: string;
+  }
+): WriteActor | null {
+  if (request.user) {
+    const user = requireAuthenticatedUser(request, reply, options);
+    if (!user) {
+      return null;
+    }
+    return {
+      authMode: "session",
+      actorLabel: user.email,
+      actorUserId: user.id,
+      user
+    };
+  }
+
+  if (request.authMode === "api_key") {
+    const actorLabel = getFallbackActorHeader(request);
+    if (!actorLabel) {
+      void reply.code(400).send({
+        ok: false,
+        error: `${options?.fallbackHeaderLabel ?? "x-wc-actor"} is required when using API key fallback`
+      });
+      return null;
+    }
+    return {
+      authMode: "api_key",
+      actorLabel,
+      actorUserId: null,
+      user: null
+    };
+  }
+
+  if (request.authMode === "none") {
+    return {
+      authMode: "none",
+      actorLabel: null,
+      actorUserId: null,
+      user: null
+    };
+  }
+
+  void reply.code(401).send({
+    ok: false,
+    error: "Login required"
+  });
+  return null;
+}
